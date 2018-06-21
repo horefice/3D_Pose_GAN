@@ -1,5 +1,6 @@
 import numpy as np
 import cv2 as cv
+import torch
 import datetime
 import os
 
@@ -22,6 +23,18 @@ def color_jet(x):
     r = 255
   return int(b), int(g), int(r)
 
+def noisy_label(label, factor=0.1):
+  noise = factor*torch.rand_like(label)
+  noisy_label = (label - noise).abs()
+
+  return noisy_label
+
+def flip_label(label, prob=0.05):
+  prob_tensor = torch.zeros_like(label).fill_(prob)
+  flip_label = (prob_tensor - torch.bernoulli(prob_tensor)).abs()
+
+  return flip_label
+
 def stack_and_project(array, z, theta):
   x = array[:, 0::2]
   y = array[:, 1::2]
@@ -29,6 +42,9 @@ def stack_and_project(array, z, theta):
   xx = x * np.cos(theta) + z * np.sin(theta)
   stack = np.stack((xx, y), axis=-1)
   stack = np.reshape(stack, (len(array), -1))
+
+  if type(array) == torch.Tensor:
+    stack = torch.from_numpy(stack).type(array.type())
 
   return stack
 
@@ -133,6 +149,22 @@ def normalize_2d(pose):
   pose[0::2] -= mu_x
   pose[1::2] -= mu_y
   return pose.T
+
+def calc_gradient_penalty(netD, real_data, fake_data, LAMBDA=10, device="cpu"):
+    alpha = torch.rand(real_data.size(0), 1, device=device)
+    alpha = alpha.expand(real_data.size())
+
+    interpolates = (alpha * real_data + ((1 - alpha) * fake_data)).to(device)
+    interpolates.requires_grad_()
+
+    output_d = netD(interpolates)
+
+    grads = torch.autograd.grad(outputs=output_d, inputs=interpolates,
+                                grad_outputs=torch.ones_like(output_d,
+                                device=device), create_graph=True)[0]
+
+    gradient_penalty = ((grads.norm(2, dim=1) - 1) ** 2).mean() * LAMBDA
+    return gradient_penalty
 
 def writeArgsFile(args,saveDir):
   args_list = dict((name, getattr(args, name)) for name in dir(args)
