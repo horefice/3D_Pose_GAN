@@ -53,7 +53,7 @@ print('\nLOADING GAN.')
 
 def weights_init(m):
     if type(m) == torch.nn.Linear:
-      torch.nn.init.xavier_uniform_(m.weight)
+      torch.nn.init.kaiming_normal_(m.weight)
       m.bias.data.fill_(0.01)
 
 netG = PoseNet(mode="generator").to(device)
@@ -63,7 +63,7 @@ netD.apply(weights_init)
 if args.model:
   netG.load_state_dict(torch.load(args.model)['netG'])
   netD.load_state_dict(torch.load(args.model)['netD'])
-  print("=> Loaded models from {}".format(args.model))
+  print("=> Loaded models from {s}".format(args.model))
 print("Model params: {:.2f}M".format(sum(p.numel() for p in netG.parameters()) / 1e6))
 
 ## TRAINING

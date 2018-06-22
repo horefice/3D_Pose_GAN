@@ -1,4 +1,5 @@
 numpy
 torch
 opencv-python
+matplotlib
 imageio

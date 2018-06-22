@@ -85,25 +85,9 @@ def create_img(arr, img=None):
   return img
 
 def to36M(bones, body_parts):
-  H36M_JOINTS_17 = [
-    'Hip',
-    'RHip',
-    'RKnee',
-    'RFoot',
-    'LHip',
-    'LKnee',
-    'LFoot',
-    'Spine',
-    'Thorax',
-    'Neck/Nose',
-    'Head',
-    'LShoulder',
-    'LElbow',
-    'LWrist',
-    'RShoulder',
-    'RElbow',
-    'RWrist',
-  ]
+  H36M_JOINTS_17 = ['Hip', 'RHip', 'RKnee', 'RFoot', 'LHip', 'LKnee', 'LFoot',
+                    'Spine', 'Thorax', 'Neck/Nose', 'Head', 'LShoulder',
+                    'LElbow', 'LWrist', 'RShoulder', 'RElbow', 'RWrist']
 
   adjusted_bones = []
   for name in H36M_JOINTS_17:
