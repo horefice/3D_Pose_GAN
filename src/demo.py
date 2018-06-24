@@ -1,13 +1,14 @@
-import sys
-import os
 import numpy as np
 import torch
 import cv2 as cv
 import argparse
 import time
+import sys
+import os
+
+import imageio
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-import imageio
 
 from posenet import PoseNet
 import utils
@@ -17,11 +18,12 @@ parser = argparse.ArgumentParser(description='Demo')
 parser.add_argument('--input', type=str, help='Path to image or video. Skip for camera')
 parser.add_argument('--proto2d', type=str, help='Path to .prototxt', required=True)
 parser.add_argument('--model2d', type=str, help='Path to .caffemodel', required=True)
-parser.add_argument('--lift_model', type=str, help='Path to trained 3D model', required=True)
+parser.add_argument('--model3d', type=str, help='Path to trained 3D model', required=True)
 parser.add_argument('--thr', default=0.1, type=float, help='Threshold value for pose parts heat map')
 parser.add_argument('--width', default=368, type=int, help='Resize input to specific width')
 parser.add_argument('--height', default=368, type=int, help='Resize input to specific height')
-parser.add_argument('--no_cuda', action='store_true', help='disables CUDA')
+parser.add_argument('--save', action='store_true', help='Store output')
+parser.add_argument('--no-cuda', action='store_true', help='disables CUDA')
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 device = torch.device("cuda" if args.cuda else "cpu")
@@ -154,10 +156,10 @@ if __name__ == '__main__':
   op_net = OpenPose(args.proto2d, args.model2d)
 
   model = PoseNet(mode='generator').to(device)
-  if args.lift_model[-4:] == '.npz':
-    model.load_npz(args.lift_model)
+  if args.model3d[-4:] == '.npz':
+    model.load_npz(args.model3d)
   else:
-    model.load_state_dict(torch.load(args.lift_model)['netG'])
+    model.load_state_dict(torch.load(args.model3d)['netG'])
   print("=> Model loaded!")
 
   cap = cv.VideoCapture(args.input if args.input else 0)
@@ -174,7 +176,8 @@ if __name__ == '__main__':
 
     if args.input or key == ord('p'):
       pose, frame = capture_pose(op_net, frame, args.thr, args.width, args.height)
-      save_pose(pose, frame)
+      if args.save:
+        save_pose(pose, frame)
     else:
       if args.cuda:
         _, frame = capture_pose(op_net, frame, args.thr, args.width, args.height)

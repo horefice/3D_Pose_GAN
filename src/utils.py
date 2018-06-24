@@ -149,6 +149,7 @@ def calc_gradient_penalty(netD, real_data, fake_data, LAMBDA=10, device="cpu"):
     return gradient_penalty
 
 def writeArgsFile(args,saveDir):
+  os.makedirs(saveDir, exist_ok=True)
   args_list = dict((name, getattr(args, name)) for name in dir(args)
                 if not name.startswith('_'))
   file_name = os.path.join(saveDir, 'args.txt')

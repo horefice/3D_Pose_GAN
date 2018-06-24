@@ -6,6 +6,7 @@ import os
 
 from posenet import PoseNet
 from dataHandler import MPII
+from viz import Viz
 import utils
 
 ## SETTINGS
@@ -24,6 +25,8 @@ parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA')
 parser.add_argument('--seed', type=int, default=1, metavar='N',
                     help='random seed (default: 1)')
+parser.add_argument('--visdom', action='store_true', default=False,
+                    help='enables VISDOM')
 parser.add_argument('--save-interval', type=int, default=1, metavar='N',
                     help='how many epochs to wait before saving (default: 1)')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N',
@@ -33,6 +36,15 @@ parser.add_argument('--log-interval', type=int, default=10, metavar='N',
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 args.saveDir = os.path.join('../models/', args.expID)
+utils.writeArgsFile(args,args.saveDir)
+
+visdom = False
+if args.visdom:
+  visdom = Viz()
+  viz_D = visdom.create_plot('Epoch', 'Loss', 'Discriminator')
+  viz_G = visdom.create_plot('Epoch', 'Loss', 'Generator')
+  viz_WD = visdom.create_plot('Epoch', 'WD', 'Wasserstein Distance')
+  viz_GP = visdom.create_plot('Epoch', 'GP', 'Gradient Penalty')
 
 device = torch.device("cpu")
 torch.manual_seed(args.seed)
@@ -42,9 +54,6 @@ if args.cuda:
   torch.cuda.manual_seed_all(args.seed)
   torch.backends.cudnn.benchmark = True
   kwargs = {'num_workers': 1, 'pin_memory': True}
-
-os.makedirs(args.saveDir, exist_ok=True)
-utils.writeArgsFile(args,args.saveDir)
 
 ## LOAD DATASETS
 print('\nDATASET INFO.')
@@ -60,13 +69,14 @@ def weights_init(m):
       torch.nn.init.constant_(m.bias, 0.0)
 
 netG = PoseNet(mode="generator").to(device)
-netG.apply(weights_init)
 netD = PoseNet(mode="discriminator").to(device)
-netD.apply(weights_init)
 if args.model:
   netG.load_state_dict(torch.load(args.model)['netG'])
   netD.load_state_dict(torch.load(args.model)['netD'])
   print("=> Loaded models from {:s}".format(args.model))
+else:
+  netG.apply(weights_init)
+  netD.apply(weights_init)
 print("Model params: {:.2f}M".format(sum(p.numel() for p in netG.parameters()) / 1e6))
 
 ## TRAINING
@@ -77,8 +87,8 @@ data_loader = torch.utils.data.DataLoader(train_data,
                                           **kwargs)
 
 # fixed_noise = torch.randn(1, 34, device=device)
-one = torch.FloatTensor([1])
-mone = one * -1
+one = torch.FloatTensor([1]).to(device)
+mone = (one * -1).to(device)
 
 optimizerG = torch.optim.Adam(netG.parameters(), lr=args.lr)
 optimizerD = torch.optim.Adam(netD.parameters(), lr=args.lr)
@@ -107,7 +117,7 @@ for epoch in range(start_epoch, args.epochs):
     G = G.mean()
     G.backward(mone)
 
-    errG = -G
+    errG = -G.item()
     optimizerG.step()
 
     ############################
@@ -139,17 +149,25 @@ for epoch in range(start_epoch, args.epochs):
     GP = utils.calc_gradient_penalty(netD, real_data, fake_data,
                                      LAMBDA=lambda_gp, device=device)
     GP.backward()
+    GP = GP.item()
 
-    errD = D_fake - D_real + GP
-    WD = D_real - D_fake
+    errD = (D_fake - D_real + GP).item()
+    WD = (D_real - D_fake).item()
     optimizerD.step()
 
     # Log
     if args.log_interval and i % args.log_interval == 0:
-      print(('[{:3d}/{:3d}][{:4d}/{:4d}] Loss_D: {:.4f} Loss_G: {:.4f} ' +
-            'D(x): {:.4f} D(G(z)): {:.4f}')
+      print(('[{:3d}/{:3d}][{:4d}/{:4d}] Loss_D: {:+.4f} Loss_G: {:+.4f} ' +
+            'WD: {:+.4f} GP: {:+.4f}')
             .format(epoch+1, args.epochs, i, iter_per_epoch,
-                    errD.item(), errG.item(), D_real, D_fake))
+                    errD, errG, WD, GP))
+
+    if visdom:
+      x = epoch + i / iter_per_epoch
+      visdom.update_plot(x=x, y=errD, window=viz_D, type_upd="append")
+      visdom.update_plot(x=x, y=errG, window=viz_G, type_upd="append")
+      visdom.update_plot(x=x, y=WD, window=viz_WD, type_upd="append")
+      visdom.update_plot(x=x, y=GP, window=viz_GP, type_upd="append")
 
   # do checkpointing
   if args.save_interval and (epoch+1) % args.save_interval == 0:
