@@ -35,7 +35,7 @@ def flip_label(label, prob=0.05):
 
   return flip_label
 
-def stack_and_project(array, z, theta):
+def rotate_and_project(array, z, theta):
   x = array[:, 0::2]
   y = array[:, 1::2]
   sin = theta.sin()

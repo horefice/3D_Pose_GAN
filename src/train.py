@@ -24,6 +24,8 @@ parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA')
 parser.add_argument('--seed', type=int, default=1, metavar='N',
                     help='random seed (default: 1)')
+parser.add_argument('--save-interval', type=int, default=1, metavar='N',
+                    help='how many epochs to wait before saving (default: 1)')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                     help='how many batches to wait before logging (default: 10)')
 
@@ -32,10 +34,11 @@ args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 args.saveDir = os.path.join('../models/', args.expID)
 
-device = torch.device("cuda" if args.cuda else "cpu")
+device = torch.device("cpu")
 torch.manual_seed(args.seed)
 kwargs = {}
 if args.cuda:
+  device = torch.device("cuda")
   torch.cuda.manual_seed_all(args.seed)
   torch.backends.cudnn.benchmark = True
   kwargs = {'num_workers': 1, 'pin_memory': True}
@@ -53,8 +56,8 @@ print('\nLOADING GAN.')
 
 def weights_init(m):
     if type(m) == torch.nn.Linear:
-      torch.nn.init.kaiming_normal_(m.weight)
-      m.bias.data.fill_(0.01)
+      torch.nn.init.xavier_uniform_(m.weight)
+      torch.nn.init.constant_(m.bias, 0.0)
 
 netG = PoseNet(mode="generator").to(device)
 netG.apply(weights_init)
@@ -73,100 +76,86 @@ data_loader = torch.utils.data.DataLoader(train_data,
                                           shuffle=True,
                                           **kwargs)
 
-fixed_noise = torch.randn(1, 34, device=device)
-real_label = 1
-fake_label = 0
-print("Real label: {:d}, Fake label: {:d}".format(real_label,fake_label))
+# fixed_noise = torch.randn(1, 34, device=device)
+one = torch.FloatTensor([1])
+mone = one * -1
 
-criterion = torch.nn.BCELoss()
 optimizerG = torch.optim.Adam(netG.parameters(), lr=args.lr)
 optimizerD = torch.optim.Adam(netD.parameters(), lr=args.lr)
 
 iter_per_epoch = len(data_loader)
 start_epoch = torch.load(args.model)['epoch'] if args.model else 0
-skip_d_update = False
 
 print('Start')
 for epoch in range(start_epoch, args.epochs):
   for i, data in enumerate(data_loader, 1):
     batch_size = data.size(0)
     real_data = data.to(device)
-    label = torch.full((batch_size,1), real_label, device=device)
+    angle = 10/180*np.pi # min and (2pi-max) angle for rotation
     ############################
-    # (1) Update D network: maximize E[D(x)] - E[D(G(z))] + GP
+    # (1) Update G network: maximize E[D(G(x))]
+    ###########################
+    netG.zero_grad()
+    for p in netD.parameters():
+      p.requires_grad = False  # disable to avoid computation
+    theta = angle + 2*(np.pi-angle)*torch.rand(batch_size, 17, device=device)
+    
+    z_pred = netG(real_data)
+    fake_data = utils.rotate_and_project(real_data, z_pred, theta)
+
+    G = netD(fake_data)
+    G = G.mean()
+    G.backward(mone)
+
+    errG = -G
+    optimizerG.step()
+
+    ############################
+    # (2) Update D network: maximize E[D(x)] - E[D(G(x))] + GP
     ###########################
     # train with real
     netD.zero_grad()
     for p in netD.parameters():
       p.requires_grad = True # enable back grad (see below)
 
-    output = netD(real_data)
-
-    label = utils.noisy_label(label)
-    # label = utils.flip_label(label)
-
-    errD_real = criterion(output, label)
-    errD_real.backward()
-    D_x = output.mean().item()
+    D_real = netD(real_data)
+    D_real = D_real.mean()
+    D_real.backward(mone)
 
     # train with fake
-    noise = torch.randn(batch_size, 34, device=device)
-    angle = 2*np.pi*torch.randn(batch_size, 17, device=device)
+    # noise = torch.randn(batch_size, 34, device=device)
+    theta = angle + 2*(np.pi-angle)*torch.rand(batch_size, 17, device=device)
 
     with torch.no_grad():
-      gen_data = netG(noise)
-    fake_data = utils.stack_and_project(noise, gen_data, angle)
-    output = netD(fake_data)
+      z_pred = netG(real_data)
+    fake_data = utils.rotate_and_project(real_data, z_pred, theta)
 
-    label.fill_(fake_label)
-    label = utils.noisy_label(label)
-    # label = utils.flip_label(label)
-
-    errD_fake = criterion(output, label)
-    errD_fake.backward()
-    D_G_z1 = output.mean().item()
+    D_fake = netD(fake_data)
+    D_fake = D_fake.mean()
+    D_fake.backward(one)
 
     # gradient penalty
-    lambda_gp = 5
+    lambda_gp = 10
     GP = utils.calc_gradient_penalty(netD, real_data, fake_data,
                                      LAMBDA=lambda_gp, device=device)
     GP.backward()
 
-    errD = errD_fake - errD_real + GP
-    WD = D_x - D_G_z1
+    errD = D_fake - D_real + GP
+    WD = D_real - D_fake
     optimizerD.step()
-
-    ############################
-    # (2) Update G network: maximize E[D(G(z))]
-    ###########################
-    netG.zero_grad()
-    for p in netD.parameters():
-      p.requires_grad = False  # disable to avoid computation
-    angle = 2*np.pi*torch.randn(batch_size, 17, device=device)
-
-    gen_data = netG(real_data)
-    fake_data = utils.stack_and_project(real_data, gen_data, angle)
-    output = netD(fake_data)
-
-    label.fill_(real_label)  # fake labels are real for generator cost
-
-    errG = criterion(output, label)
-    errG.backward()
-    D_G_z2 = output.mean().item()
-
-    optimizerG.step()
 
     # Log
     if args.log_interval and i % args.log_interval == 0:
-      print(('[{:d}/{:d}][{:d}/{:d}] Loss_D: {:.4f} Loss_G: {:.4f} ' +
-            'D(x): {:.4f} D(G(z)): {:.4f} / {:.4f}')
+      print(('[{:3d}/{:3d}][{:4d}/{:4d}] Loss_D: {:.4f} Loss_G: {:.4f} ' +
+            'D(x): {:.4f} D(G(z)): {:.4f}')
             .format(epoch+1, args.epochs, i, iter_per_epoch,
-                    errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
+                    errD.item(), errG.item(), D_real, D_fake))
 
   # do checkpointing
-  print('Saving at checkpoint...')
-  torch.save({'epoch': epoch+1,
-             'netG': netG.state_dict(),
-             'netD': netD.state_dict()
-             }, '{:s}/checkpoint.pth'.format(args.saveDir))
+  if args.save_interval and (epoch+1) % args.save_interval == 0:
+    torch.save({'epoch': epoch+1,
+               'netG': netG.state_dict(),
+               'netD': netD.state_dict()
+               }, '{:s}/checkpoint.pth'.format(args.saveDir))
+    print('Saved at checkpoint!')
 print('Finish')

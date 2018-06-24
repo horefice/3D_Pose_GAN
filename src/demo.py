@@ -93,7 +93,7 @@ def create_pose(model, points):
   points = torch.from_numpy(np.array(points))
   if model.is_cuda:
     points = points.cuda()
-  z_pred = model.forward(points).detach().numpy()
+  z_pred = model.forward(points).detach().cpu().numpy()
 
   pose = np.stack((x, y, z_pred), axis=-1)
   pose = np.reshape(pose, (len(points), -1))
