@@ -63,7 +63,7 @@ netD.apply(weights_init)
 if args.model:
   netG.load_state_dict(torch.load(args.model)['netG'])
   netD.load_state_dict(torch.load(args.model)['netD'])
-  print("=> Loaded models from {s}".format(args.model))
+  print("=> Loaded models from {:s}".format(args.model))
 print("Model params: {:.2f}M".format(sum(p.numel() for p in netG.parameters()) / 1e6))
 
 ## TRAINING
@@ -93,15 +93,17 @@ for epoch in range(start_epoch, args.epochs):
     real_data = data.to(device)
     label = torch.full((batch_size,1), real_label, device=device)
     ############################
-    # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z))) - GP
+    # (1) Update D network: maximize E[D(x)] - E[D(G(z))] + GP
     ###########################
     # train with real
     netD.zero_grad()
+    for p in netD.parameters():
+      p.requires_grad = True # enable back grad (see below)
 
     output = netD(real_data)
 
     label = utils.noisy_label(label)
-    label = utils.flip_label(label)
+    # label = utils.flip_label(label)
 
     errD_real = criterion(output, label)
     errD_real.backward()
@@ -109,36 +111,40 @@ for epoch in range(start_epoch, args.epochs):
 
     # train with fake
     noise = torch.randn(batch_size, 34, device=device)
-    deg = np.random.uniform(1,360)
+    angle = 2*np.pi*torch.randn(batch_size, 17, device=device)
 
-    gen_data = netG(noise).detach()
-    fake_data = utils.stack_and_project(noise, gen_data, np.pi * deg / 180.)
+    with torch.no_grad():
+      gen_data = netG(noise)
+    fake_data = utils.stack_and_project(noise, gen_data, angle)
     output = netD(fake_data)
 
     label.fill_(fake_label)
     label = utils.noisy_label(label)
-    label = utils.flip_label(label)
+    # label = utils.flip_label(label)
 
     errD_fake = criterion(output, label)
     errD_fake.backward()
-    D_G_z = output.mean().item()
+    D_G_z1 = output.mean().item()
 
     # gradient penalty
-    lambda_gp = 10
+    lambda_gp = 5
     GP = utils.calc_gradient_penalty(netD, real_data, fake_data,
                                      LAMBDA=lambda_gp, device=device)
     GP.backward()
 
-    errD = errD_real + errD_fake + GP
+    errD = errD_fake - errD_real + GP
+    WD = D_x - D_G_z1
     optimizerD.step()
 
     ############################
-    # (2) Update G network: maximize log(D(G(x)))
+    # (2) Update G network: maximize E[D(G(z))]
     ###########################
     netG.zero_grad()
-    angle = np.random.uniform(0,2*np.pi)
+    for p in netD.parameters():
+      p.requires_grad = False  # disable to avoid computation
+    angle = 2*np.pi*torch.randn(batch_size, 17, device=device)
 
-    gen_data = netG(real_data).detach()
+    gen_data = netG(real_data)
     fake_data = utils.stack_and_project(real_data, gen_data, angle)
     output = netD(fake_data)
 
@@ -146,16 +152,16 @@ for epoch in range(start_epoch, args.epochs):
 
     errG = criterion(output, label)
     errG.backward()
-    D_G_x = output.mean().item()
+    D_G_z2 = output.mean().item()
 
     optimizerG.step()
 
     # Log
     if args.log_interval and i % args.log_interval == 0:
-      print(('[{:d}/{:d}][{:3d}/{:3d}] Loss_D: {:.4f} Loss_G: {:.4f} ' +
-            'D(x): {:.4f} D(G(z)): {:.4f} D(G(x)): {:.4f}')
+      print(('[{:d}/{:d}][{:d}/{:d}] Loss_D: {:.4f} Loss_G: {:.4f} ' +
+            'D(x): {:.4f} D(G(z)): {:.4f} / {:.4f}')
             .format(epoch+1, args.epochs, i, iter_per_epoch,
-                    errD.item(), errG.item(), D_x, D_G_z, D_G_x))
+                    errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
 
   # do checkpointing
   print('Saving at checkpoint...')

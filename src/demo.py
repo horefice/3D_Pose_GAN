@@ -52,7 +52,8 @@ H36M_POSE_PAIRS = [["Neck/Nose", "RShoulder"], ["Neck/Nose", "LShoulder"],
 
 class OpenPose(object):
   """
-  This implementation is based on https://github.com/opencv/opencv/blob/master/samples/dnn/openpose.py
+  This implementation is based on
+  https://github.com/opencv/opencv/blob/master/samples/dnn/openpose.py
   """
 
   def __init__(self, proto, model):
@@ -92,7 +93,7 @@ def create_pose(model, points):
   points = torch.from_numpy(np.array(points))
   if model.is_cuda:
     points = points.cuda()
-  z_pred = model.forward(points).data.cpu().numpy()
+  z_pred = model.forward(points).detach().numpy()
 
   pose = np.stack((x, y, z_pred), axis=-1)
   pose = np.reshape(pose, (len(points), -1))
@@ -113,7 +114,7 @@ def capture_pose(openpose, frame, thr=0.1, width=368, height=368):
 
 def display_pose(pose):
   f = plt.figure()
-  f.suptitle('Demo from Image')
+  f.suptitle('Demo')
 
   ax = f.add_subplot(111, projection='3d')
   ax.set_title('3D Pose Estimation')
@@ -146,11 +147,11 @@ def save_pose(pose, frame, out_directory="output", deg=15):
     img = utils.create_projection_img(pose, np.pi * d / 180.)
     images.append(img)
     # cv.imwrite(os.path.join(out_directory, "rot_{:03d}_degree.png".format(d)), img)
-  imageio.mimsave(os.path.join(out_directory, "output.gif"),images)
+  imageio.mimsave(os.path.join(out_directory, "output.gif"),images, fps=6)
   print("=> Pose saved!")
 
 if __name__ == '__main__':
-  openpose = OpenPose(args.proto2d, args.model2d)
+  op_net = OpenPose(args.proto2d, args.model2d)
 
   model = PoseNet(mode='generator').to(device)
   if args.lift_model[-4:] == '.npz':
@@ -172,11 +173,11 @@ if __name__ == '__main__':
     frame = cv.resize(frame, (368, 368))
 
     if args.input or key == ord('p'):
-      pose, frame = capture_pose(openpose, frame, args.thr, args.width, args.height)
+      pose, frame = capture_pose(op_net, frame, args.thr, args.width, args.height)
       save_pose(pose, frame)
     else:
       if args.cuda:
-        _, frame = capture_pose(openpose, frame, args.thr, args.width, args.height)
+        _, frame = capture_pose(op_net, frame, args.thr, args.width, args.height)
       cv.imshow('Video Demo', frame)
 
     num_frames += 1

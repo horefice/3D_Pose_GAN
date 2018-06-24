@@ -38,13 +38,11 @@ def flip_label(label, prob=0.05):
 def stack_and_project(array, z, theta):
   x = array[:, 0::2]
   y = array[:, 1::2]
-
-  xx = x * np.cos(theta) + z * np.sin(theta)
-  stack = np.stack((xx, y), axis=-1)
-  stack = np.reshape(stack, (len(array), -1))
-
-  if type(array) == torch.Tensor:
-    stack = torch.from_numpy(stack).type(array.type())
+  sin = theta.sin()
+  cos = theta.cos()
+  
+  xx = x*sin + z*sin
+  stack = torch.cat((xx,y), dim=-1)
 
   return stack
 

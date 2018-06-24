@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.utils.data
 import utils
 
 class MPII(torch.utils.data.Dataset):

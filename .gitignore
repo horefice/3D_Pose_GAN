@@ -1,1 +1,4 @@
+*pyc
+output/
+models/test/
 pose_iter_440000.caffemodel
