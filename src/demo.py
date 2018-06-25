@@ -16,41 +16,44 @@ import utils
 # PARSER
 parser = argparse.ArgumentParser(description='Demo')
 parser.add_argument('--input', type=str, help='Path to image or video. Skip for camera')
-parser.add_argument('--proto2d', type=str, help='Path to .prototxt', required=True)
-parser.add_argument('--model2d', type=str, help='Path to .caffemodel', required=True)
-parser.add_argument('--model3d', type=str, help='Path to trained 3D model', required=True)
-parser.add_argument('--thr', default=0.1, type=float, help='Threshold value for pose parts heat map')
-parser.add_argument('--width', default=368, type=int, help='Resize input to specific width')
-parser.add_argument('--height', default=368, type=int, help='Resize input to specific height')
+parser.add_argument('--proto2d', type=str, help='Path to .prototxt',
+                    default='../models/openpose_pose_coco.prototxt')
+parser.add_argument('--model2d', type=str, help='Path to .caffemodel',
+                    default='../models/pose_iter_440000.caffemodel')
+parser.add_argument('--model3d', type=str, help='Path to trained 3D model',
+                    default='../models/test/checkpoint.pth')
+parser.add_argument('--thr', default=0.1, type=float, help='Threshold value for heatmap')
+parser.add_argument('--width', default=368, type=int, help='Resize input to width')
+parser.add_argument('--height', default=368, type=int, help='Resize input to height')
 parser.add_argument('--save', action='store_true', help='Store output')
 parser.add_argument('--no-cuda', action='store_true', help='disables CUDA')
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
-device = torch.device("cuda" if args.cuda else "cpu")
+device = torch.device('cuda' if args.cuda else 'cpu')
 
 # GRAPHS (COCO)
-BODY_PARTS = {"Nose": 0, "Neck": 1, "RShoulder": 2, "RElbow": 3, "RWrist": 4,
-              "LShoulder": 5, "LElbow": 6, "LWrist": 7, "RHip": 8, "RKnee": 9,
-              "RAnkle": 10, "LHip": 11, "LKnee": 12, "LAnkle": 13, "REye": 14,
-              "LEye": 15, "REar": 16, "LEar": 17, "Background": 18}
+BODY_PARTS = {'Nose': 0, 'Neck': 1, 'RShoulder': 2, 'RElbow': 3, 'RWrist': 4,
+              'LShoulder': 5, 'LElbow': 6, 'LWrist': 7, 'RHip': 8, 'RKnee': 9,
+              'RAnkle': 10, 'LHip': 11, 'LKnee': 12, 'LAnkle': 13, 'REye': 14,
+              'LEye': 15, 'REar': 16, 'LEar': 17, 'Background': 18}
 
-POSE_PAIRS = [["Neck", "RShoulder"], ["Neck", "LShoulder"], ["RShoulder", "RElbow"],
-              ["RElbow", "RWrist"], ["LShoulder", "LElbow"], ["LElbow", "LWrist"],
-              ["Neck", "RHip"], ["RHip", "RKnee"], ["RKnee", "RAnkle"], ["Neck", "LHip"],
-              ["LHip", "LKnee"], ["LKnee", "LAnkle"], ["Neck", "Nose"], ["Nose", "REye"],
-              ["REye", "REar"], ["Nose", "LEye"], ["LEye", "LEar"]]
+POSE_PAIRS = [['Neck', 'RShoulder'], ['Neck', 'LShoulder'], ['RShoulder', 'RElbow'],
+              ['RElbow', 'RWrist'], ['LShoulder', 'LElbow'], ['LElbow', 'LWrist'],
+              ['Neck', 'RHip'], ['RHip', 'RKnee'], ['RKnee', 'RAnkle'], ['Neck', 'LHip'],
+              ['LHip', 'LKnee'], ['LKnee', 'LAnkle'], ['Neck', 'Nose'], ['Nose', 'REye'],
+              ['REye', 'REar'], ['Nose', 'LEye'], ['LEye', 'LEar']]
 
 # GRAPHS (H36M)
 H36M_JOINTS_17 = ['Hip', 'RHip', 'RKnee', 'RFoot', 'LHip', 'LKnee', 'LFoot',
                   'Spine', 'Thorax', 'Neck/Nose', 'Head', 'LShoulder',
                   'LElbow', 'LWrist', 'RShoulder', 'RElbow', 'RWrist']
-H36M_POSE_PAIRS = [["Neck/Nose", "RShoulder"], ["Neck/Nose", "LShoulder"],
-                   ["RShoulder", "RElbow"], ["RElbow", "RWrist"],
-                   ["LShoulder", "LElbow"], ["LElbow", "LWrist"],
-                   ["Head","Neck/Nose"], ["Neck/Nose", "Thorax"],
-                   ["Thorax", "Spine"], ["Spine", "Hip"],
-                   ["Hip", "RHip"], ["RHip", "RKnee"], ["RKnee", "RFoot"],
-                   ["Hip", "LHip"], ["LHip", "LKnee"], ["LKnee", "LFoot"]]
+H36M_POSE_PAIRS = [['Neck/Nose', 'RShoulder'], ['Neck/Nose', 'LShoulder'],
+                   ['RShoulder', 'RElbow'], ['RElbow', 'RWrist'],
+                   ['LShoulder', 'LElbow'], ['LElbow', 'LWrist'],
+                   ['Head','Neck/Nose'], ['Neck/Nose', 'Thorax'],
+                   ['Thorax', 'Spine'], ['Spine', 'Hip'],
+                   ['Hip', 'RHip'], ['RHip', 'RKnee'], ['RKnee', 'RFoot'],
+                   ['Hip', 'LHip'], ['LHip', 'LKnee'], ['LKnee', 'LFoot']]
 
 class OpenPose(object):
   """
@@ -121,8 +124,6 @@ def display_pose(pose):
   ax = f.add_subplot(111, projection='3d')
   ax.set_title('3D Pose Estimation')
 
-  pose = pose[0]
-
   for part in H36M_JOINTS_17:
     i = H36M_JOINTS_17.index(part)*3
     ax.plot([pose[i]],[pose[i+1]],[pose[i+2]], 'o')
@@ -140,17 +141,18 @@ def display_pose(pose):
 
   plt.show()
 
-def save_pose(pose, frame, out_directory="output", deg=15):
+def save_pose(pose, frame, out_directory='../output', deg=15):
   os.makedirs(out_directory, exist_ok=True)
-  cv.imwrite(os.path.join(out_directory, 'openpose_detect.jpg'), frame)
+  cv.imwrite(os.path.join(out_directory, 'openpose.jpg'), frame)
+  torch.save(pose, os.path.join(out_directory, 'pose.pt'))
 
   images = []    
   for d in range(0, 360 + deg, deg):
     img = utils.create_projection_img(pose, np.pi * d / 180.)
     images.append(img)
-    # cv.imwrite(os.path.join(out_directory, "rot_{:03d}_degree.png".format(d)), img)
-  imageio.mimsave(os.path.join(out_directory, "output.gif"),images, fps=6)
-  print("=> Pose saved!")
+    # cv.imwrite(os.path.join(out_directory, 'rot_{:03d}_degree.png'.format(d)), img)
+  imageio.mimsave(os.path.join(out_directory, 'output.gif'),images, fps=6)
+  print('=> Pose saved!')
 
 if __name__ == '__main__':
   op_net = OpenPose(args.proto2d, args.model2d)
@@ -160,7 +162,7 @@ if __name__ == '__main__':
     model.load_npz(args.model3d)
   else:
     model.load_state_dict(torch.load(args.model3d)['netG'])
-  print("=> Model loaded!")
+  print('=> Model loaded!')
 
   cap = cv.VideoCapture(args.input if args.input else 0)
   pose = []
@@ -188,10 +190,10 @@ if __name__ == '__main__':
       break
 
   elasped = time.time() - start
-  print("[INFO] elasped time: {:.2f}s".format(elasped))
-  print("[INFO] approx. FPS: {:.2f}".format(num_frames / (elasped)))
+  print('[INFO] elasped time: {:.2f}s'.format(elasped))
+  print('[INFO] approx. FPS: {:.2f}'.format(num_frames / (elasped)))
   
   cap.release()
   cv.destroyAllWindows()
 
-  display_pose(pose)
+  display_pose(pose[0])

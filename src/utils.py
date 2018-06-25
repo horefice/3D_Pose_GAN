@@ -35,7 +35,7 @@ def flip_label(label, prob=0.05):
 
   return flip_label
 
-def rotate_and_project(array, z, theta):
+def rotate_and_project(array, z, theta=0):
   x = array[:, 0::2]
   y = array[:, 1::2]
   sin = theta.sin()
@@ -46,7 +46,7 @@ def rotate_and_project(array, z, theta):
 
   return stack
 
-def create_projection_img(array, theta):
+def create_projection_img(array, theta=0):
   x = array[:, 0::3]
   y = array[:, 1::3]
   z = array[:, 2::3]
@@ -132,7 +132,14 @@ def normalize_2d(pose):
   pose[1::2] -= mu_y
   return pose.T
 
-def calc_gradient_penalty(netD, real_data, fake_data, LAMBDA=10, device="cpu"):
+def flatten_weights(net):
+  weights = []
+  for layer in net.children():
+    for weight in layer.weight.data.numpy().flatten():
+      weights.append(weight)
+  return weights
+
+def calc_gradient_penalty(netD, real_data, fake_data, LAMBDA=10, device='cpu'):
     alpha = torch.rand(real_data.size(0), 1, device=device)
     alpha = alpha.expand(real_data.size())
 

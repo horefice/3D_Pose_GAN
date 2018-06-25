@@ -38,19 +38,11 @@ args.cuda = not args.no_cuda and torch.cuda.is_available()
 args.saveDir = os.path.join('../models/', args.expID)
 utils.writeArgsFile(args,args.saveDir)
 
-visdom = False
-if args.visdom:
-  visdom = Viz()
-  viz_D = visdom.create_plot('Epoch', 'Loss', 'Discriminator')
-  viz_G = visdom.create_plot('Epoch', 'Loss', 'Generator')
-  viz_WD = visdom.create_plot('Epoch', 'WD', 'Wasserstein Distance')
-  viz_GP = visdom.create_plot('Epoch', 'GP', 'Gradient Penalty')
-
-device = torch.device("cpu")
+device = torch.device('cpu')
 torch.manual_seed(args.seed)
 kwargs = {}
 if args.cuda:
-  device = torch.device("cuda")
+  device = torch.device('cuda')
   torch.cuda.manual_seed_all(args.seed)
   torch.backends.cudnn.benchmark = True
   kwargs = {'num_workers': 1, 'pin_memory': True}
@@ -68,16 +60,16 @@ def weights_init(m):
       torch.nn.init.xavier_uniform_(m.weight)
       torch.nn.init.constant_(m.bias, 0.0)
 
-netG = PoseNet(mode="generator").to(device)
-netD = PoseNet(mode="discriminator").to(device)
+netG = PoseNet(mode='generator').to(device)
+netD = PoseNet(mode='discriminator').to(device)
 if args.model:
   netG.load_state_dict(torch.load(args.model)['netG'])
   netD.load_state_dict(torch.load(args.model)['netD'])
-  print("=> Loaded models from {:s}".format(args.model))
+  print('=> Loaded models from {:s}'.format(args.model))
 else:
   netG.apply(weights_init)
   netD.apply(weights_init)
-print("Model params: {:.2f}M".format(sum(p.numel() for p in netG.parameters()) / 1e6))
+print('Model params: {:.2f}M'.format(sum(p.numel() for p in netG.parameters()) / 1e6))
 
 ## TRAINING
 print('\nTRAINING.')
@@ -86,7 +78,6 @@ data_loader = torch.utils.data.DataLoader(train_data,
                                           shuffle=True,
                                           **kwargs)
 
-# fixed_noise = torch.randn(1, 34, device=device)
 one = torch.FloatTensor([1]).to(device)
 mone = (one * -1).to(device)
 
@@ -95,6 +86,21 @@ optimizerD = torch.optim.Adam(netD.parameters(), lr=args.lr)
 
 iter_per_epoch = len(data_loader)
 start_epoch = torch.load(args.model)['epoch'] if args.model else 0
+
+if args.visdom:
+  visdom = Viz()
+  viz_D = visdom.create_plot('Epoch', 'Loss', 'Loss Discriminator')
+  viz_G = visdom.create_plot('Epoch', 'Loss', 'Loss Generator')
+  viz_WD = visdom.create_plot('Epoch', 'WD', 'Wasserstein Distance')
+  viz_GP = visdom.create_plot('Epoch', 'GP', 'Gradient Penalty')
+  
+  fsamp = '../models/sample_pose.pt'
+  viz_2D = False
+  if os.path.isfile(fsamp):
+    viz_2D = torch.load(fsamp)
+    viz_img = utils.create_projection_img(viz_2D)
+    viz_img = visdom.create_img(np.transpose(viz_img,(2,0,1)), title='2D Sample')
+    viz_2D = torch.from_numpy(np.delete(viz_2D, np.arange(2, 51, 3))).unsqueeze(0)
 
 print('Start')
 for epoch in range(start_epoch, args.epochs):
@@ -162,12 +168,12 @@ for epoch in range(start_epoch, args.epochs):
             .format(epoch+1, args.epochs, i, iter_per_epoch,
                     errD, errG, WD, GP))
 
-    if visdom:
-      x = epoch + i / iter_per_epoch
-      visdom.update_plot(x=x, y=errD, window=viz_D, type_upd="append")
-      visdom.update_plot(x=x, y=errG, window=viz_G, type_upd="append")
-      visdom.update_plot(x=x, y=WD, window=viz_WD, type_upd="append")
-      visdom.update_plot(x=x, y=GP, window=viz_GP, type_upd="append")
+      if args.visdom:
+        x = epoch + i / iter_per_epoch
+        visdom.update_plot(x=x, y=errD, window=viz_D, type_upd='append')
+        visdom.update_plot(x=x, y=errG, window=viz_G, type_upd='append')
+        visdom.update_plot(x=x, y=WD, window=viz_WD, type_upd='append')
+        visdom.update_plot(x=x, y=GP, window=viz_GP, type_upd='append')
 
   # do checkpointing
   if args.save_interval and (epoch+1) % args.save_interval == 0:
@@ -176,4 +182,18 @@ for epoch in range(start_epoch, args.epochs):
                'netD': netD.state_dict()
                }, '{:s}/checkpoint.pth'.format(args.saveDir))
     print('Saved at checkpoint!')
+
+    if args.visdom and viz_2D:
+      with torch.no_grad():
+        z_pred = netG(viz_2D).squeeze()
+      viz_3D = torch.stack((viz_2D[0,0::2], viz_2D[0,1::2], z_pred), dim=1)
+      visdom.create_scatter(viz_3D,title='Sample Prediction (epoch {:d})'
+                                         .format(epoch+1))
+
+if args.visdom:
+  opts_D = dict(xlabel='Weight', ylabel='Freq', title='Weight Histogram (D)')
+  opts_G = dict(xlabel='Weight', ylabel='Freq', title='Weight Histogram (G)')
+  visdom.create_hist(utils.flatten_weights(netD), opts=opts_D)
+  visdom.create_hist(utils.flatten_weights(netG), opts=opts_G)
+
 print('Finish')
