@@ -23,10 +23,10 @@ class Viz(object):
                   update=type_upd)
 
   def create_img(self, x, title=''):
-    self.viz.image(x, opts=dict(title=title))
+    return self.viz.image(x, opts=dict(title=title))
 
   def create_scatter(self, x, title=''):
-    self.viz.scatter(x, opts=dict(title=title))
+    return self.viz.scatter(x, opts=dict(title=title))
 
   def create_hist(self, x, opts={}):
     return self.viz.histogram(np.array([x]), opts=opts)

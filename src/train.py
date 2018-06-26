@@ -10,7 +10,7 @@ from viz import Viz
 import utils
 
 ## SETTINGS
-parser = argparse.ArgumentParser(description='MyNet Implementation')
+parser = argparse.ArgumentParser()
 parser.add_argument('-x', '--expID', type=str, default='test', metavar='S',
                     help='Experiment ID')
 parser.add_argument('-b', '--batch-size', type=int, default=64, metavar='N',
@@ -80,6 +80,16 @@ data_loader = torch.utils.data.DataLoader(train_data,
 
 one = torch.FloatTensor([1]).to(device)
 mone = (one * -1).to(device)
+fixed_data = np.array([ 0.        ,  0.        ,  -0.40023696,  0.04447079,
+                       -0.66706157,  0.75600314,  -0.93388623,  0.75600314,
+                        0.40023685, -0.04447079,   0.57812   ,  0.57812   ,
+                        0.40023685,  1.3785939 ,   0.13341236, -0.5114138 ,
+                        0.26682448, -1.0228276 ,   0.31129527, -1.1117692 ,
+                        0.35576606, -1.2007108 ,   0.93388605, -1.0228276 ,
+                        1.1117692 , -0.31129527,   1.0228276 ,  0.22235394,
+                       -0.40023696, -1.0228276 ,  -0.8449447 , -0.40023685,
+                       -1.1117692 ,  0.13341236  ])
+fixed_t = torch.from_numpy(fixed_data).float().to(device)
 
 optimizerG = torch.optim.Adam(netG.parameters(), lr=args.lr)
 optimizerD = torch.optim.Adam(netD.parameters(), lr=args.lr)
@@ -93,16 +103,6 @@ if args.visdom:
   viz_G = visdom.create_plot('Epoch', 'Loss', 'Loss Generator')
   viz_WD = visdom.create_plot('Epoch', 'WD', 'Wasserstein Distance')
   viz_GP = visdom.create_plot('Epoch', 'GP', 'Gradient Penalty')
-  
-  fixed_data = np.array([ 0.        ,  0.        ,  -0.40023696,  0.04447079,
-                         -0.66706157,  0.75600314,  -0.93388623,  0.75600314,
-                          0.40023685, -0.04447079,   0.57812   ,  0.57812   ,
-                          0.40023685,  1.3785939 ,   0.13341236, -0.5114138 ,
-                          0.26682448, -1.0228276 ,   0.31129527, -1.1117692 ,
-                          0.35576606, -1.2007108 ,   0.93388605, -1.0228276 ,
-                          1.1117692 , -0.31129527,   1.0228276 ,  0.22235394,
-                         -0.40023696, -1.0228276 ,  -0.8449447 , -0.40023685,
-                         -1.1117692 ,  0.13341236  ])
   viz_img = np.transpose(utils.create_img(fixed_data),(2,0,1))
   viz_img = visdom.create_img(viz_img, title='2D Sample')
 
@@ -127,7 +127,7 @@ for epoch in range(start_epoch, args.epochs):
     G = G.mean()
     G.backward(mone)
 
-    errG = -G.item()
+    loss_G = -G.item()
     optimizerG.step()
 
     ############################
@@ -160,7 +160,7 @@ for epoch in range(start_epoch, args.epochs):
     GP.backward()
     GP = GP.item()
 
-    errD = (D_fake - D_real + GP).item()
+    loss_D = (D_fake - D_real + GP).item()
     WD = (D_real - D_fake).item()
     optimizerD.step()
 
@@ -169,12 +169,12 @@ for epoch in range(start_epoch, args.epochs):
       print(('[{:3d}/{:3d}][{:4d}/{:4d}] Loss_D: {:+.4f} Loss_G: {:+.4f} ' +
             'WD: {:+.4f} GP: {:+.4f}')
             .format(epoch+1, args.epochs, i, iter_per_epoch,
-                    errD, errG, WD, GP))
+                    loss_D, loss_G, WD, GP))
 
       if args.visdom:
         x = epoch + i / iter_per_epoch
-        visdom.update_plot(x=x, y=errD, window=viz_D, type_upd='append')
-        visdom.update_plot(x=x, y=errG, window=viz_G, type_upd='append')
+        visdom.update_plot(x=x, y=loss_D, window=viz_D, type_upd='append')
+        visdom.update_plot(x=x, y=loss_G, window=viz_G, type_upd='append')
         visdom.update_plot(x=x, y=WD, window=viz_WD, type_upd='append')
         visdom.update_plot(x=x, y=GP, window=viz_GP, type_upd='append')
 
@@ -187,12 +187,14 @@ for epoch in range(start_epoch, args.epochs):
     print('Saved at checkpoint!')
 
     if args.visdom:
-      viz_2D = torch.from_numpy(fixed_data).float()
       with torch.no_grad():
-        z_pred = netG(viz_2D.unsqueeze(0)).squeeze()
-      viz_3D = torch.stack((viz_2D[0::2], viz_2D[1::2], z_pred), dim=1)
+        z_pred = netG(fixed_t.unsqueeze(0)).squeeze()
+      viz_3D = torch.stack((fixed_t[0::2], fixed_t[1::2], z_pred), dim=1)
       visdom.create_scatter(viz_3D,title='Sample Prediction (epoch {:d})'
                                          .format(epoch+1))
+
+# export model
+torch.onnx.export(netG, fixed_t, '{:s}/posenet.onnx'.format(args.saveDir))
 
 if args.visdom:
   opts_D = dict(xlabel='Weight', ylabel='Freq', title='Weight Histogram (D)')
