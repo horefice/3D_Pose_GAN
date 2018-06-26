@@ -135,7 +135,7 @@ def normalize_2d(pose):
 def flatten_weights(net):
   weights = []
   for layer in net.children():
-    for weight in layer.weight.data.numpy().flatten():
+    for weight in layer.weight.data.cpu().numpy().flatten():
       weights.append(weight)
   return weights
 

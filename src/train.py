@@ -94,13 +94,17 @@ if args.visdom:
   viz_WD = visdom.create_plot('Epoch', 'WD', 'Wasserstein Distance')
   viz_GP = visdom.create_plot('Epoch', 'GP', 'Gradient Penalty')
   
-  fsamp = '../models/sample_pose.pt'
-  viz_2D = False
-  if os.path.isfile(fsamp):
-    viz_2D = torch.load(fsamp)
-    viz_img = utils.create_projection_img(viz_2D)
-    viz_img = visdom.create_img(np.transpose(viz_img,(2,0,1)), title='2D Sample')
-    viz_2D = torch.from_numpy(np.delete(viz_2D, np.arange(2, 51, 3))).unsqueeze(0)
+  fixed_data = np.array([ 0.        ,  0.        ,  -0.40023696,  0.04447079,
+                         -0.66706157,  0.75600314,  -0.93388623,  0.75600314,
+                          0.40023685, -0.04447079,   0.57812   ,  0.57812   ,
+                          0.40023685,  1.3785939 ,   0.13341236, -0.5114138 ,
+                          0.26682448, -1.0228276 ,   0.31129527, -1.1117692 ,
+                          0.35576606, -1.2007108 ,   0.93388605, -1.0228276 ,
+                          1.1117692 , -0.31129527,   1.0228276 ,  0.22235394,
+                         -0.40023696, -1.0228276 ,  -0.8449447 , -0.40023685,
+                         -1.1117692 ,  0.13341236  ])
+  viz_img = np.transpose(utils.create_img(fixed_data),(2,0,1))
+  viz_img = visdom.create_img(viz_img, title='2D Sample')
 
 print('Start')
 for epoch in range(start_epoch, args.epochs):
@@ -139,7 +143,6 @@ for epoch in range(start_epoch, args.epochs):
     D_real.backward(mone)
 
     # train with fake
-    # noise = torch.randn(batch_size, 34, device=device)
     theta = angle + 2*(np.pi-angle)*torch.rand(batch_size, 17, device=device)
 
     with torch.no_grad():
@@ -183,10 +186,11 @@ for epoch in range(start_epoch, args.epochs):
                }, '{:s}/checkpoint.pth'.format(args.saveDir))
     print('Saved at checkpoint!')
 
-    if args.visdom and viz_2D:
+    if args.visdom:
+      viz_2D = torch.from_numpy(fixed_data).float()
       with torch.no_grad():
-        z_pred = netG(viz_2D).squeeze()
-      viz_3D = torch.stack((viz_2D[0,0::2], viz_2D[0,1::2], z_pred), dim=1)
+        z_pred = netG(viz_2D.unsqueeze(0)).squeeze()
+      viz_3D = torch.stack((viz_2D[0::2], viz_2D[1::2], z_pred), dim=1)
       visdom.create_scatter(viz_3D,title='Sample Prediction (epoch {:d})'
                                          .format(epoch+1))
 
