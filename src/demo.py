@@ -1,35 +1,34 @@
 import numpy as np
-import torch
 import cv2 as cv
 import argparse
 import time
 import sys
 import os
 
-import imageio
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
-from posenet import PoseNet
-import utils
+sys.path.append('/home/narvis/Lib/openpose/build/python/openpose')
+from openpose import *
+
+import onnx, onnx.utils
 
 # PARSER
 parser = argparse.ArgumentParser(description='Demo')
 parser.add_argument('--input', type=str, help='Path to image or video. Skip for camera')
-parser.add_argument('--proto2d', type=str, help='Path to .prototxt',
-                    default='../models/openpose_pose_coco.prototxt')
-parser.add_argument('--model2d', type=str, help='Path to .caffemodel',
-                    default='../models/pose_iter_440000.caffemodel')
-parser.add_argument('--model3d', type=str, help='Path to trained 3D model',
-                    default='../models/test/checkpoint.pth')
-parser.add_argument('--thr', default=0.1, type=float, help='Threshold value for heatmap')
-parser.add_argument('--width', default=368, type=int, help='Resize input to width')
-parser.add_argument('--height', default=368, type=int, help='Resize input to height')
-parser.add_argument('--save', action='store_true', help='Store output')
-parser.add_argument('--no-cuda', action='store_true', help='disables CUDA')
+parser.add_argument('--model', type=str, help='Path to ONNX model',
+                    default='../models/posenet.proto')
+parser.add_argument('--backend', type=str, help='ONNX Backend (caffe or tf)',
+                    default='tf')
+parser.add_argument('--thr', default=0.05, type=float, help='Threshold value for heatmap')
 args = parser.parse_args()
-args.cuda = not args.no_cuda and torch.cuda.is_available()
-device = torch.device('cuda' if args.cuda else 'cpu')
+if args.backend == 'tf':
+  import onnx_tf.backend as backend
+elif args.backend == 'caffe':
+  import caffe2.python.onnx.backend as backend
+else:
+  print('[ERROR] A valid backend must be selected!')
+  quit()
 
 # GRAPHS (COCO)
 BODY_PARTS = {'Nose': 0, 'Neck': 1, 'RShoulder': 2, 'RElbow': 3, 'RWrist': 4,
@@ -55,67 +54,167 @@ H36M_POSE_PAIRS = [['Neck/Nose', 'RShoulder'], ['Neck/Nose', 'LShoulder'],
                    ['Hip', 'RHip'], ['RHip', 'RKnee'], ['RKnee', 'RFoot'],
                    ['Hip', 'LHip'], ['LHip', 'LKnee'], ['LKnee', 'LFoot']]
 
-class OpenPose(object):
-  """
-  This implementation is based on
-  https://github.com/opencv/opencv/blob/master/samples/dnn/openpose.py
-  """
+def color_jet(x):
+  if x < 0.25:
+    b = 255
+    g = x / 0.25 * 255
+    r = 0
+  elif x >= 0.25 and x < 0.5:
+    b = 255 - (x - 0.25) / 0.25 * 255
+    g = 255
+    r = 0
+  elif x >= 0.5 and x < 0.75:
+    b = 0
+    g = 255
+    r = (x - 0.5) / 0.25 * 255
+  else:
+    b = 0
+    g = 255 - (x - 0.75) / 0.25 * 255
+    r = 255
+  return int(b), int(g), int(r)
 
-  def __init__(self, proto, model):
-    self.net = cv.dnn.readNetFromCaffe(proto, model)
+def create_projection_img(array, r1=0, r2=0):
+  x = array[:, 0::3]
+  y = array[:, 1::3]
+  z = array[:, 2::3]
 
-  def predict(self, frame, thr=0.1, width=368, height=368):
+  rotMat, _ = cv.Rodrigues(np.array([r2,r1,0.]))
+  projection = np.dot(rotMat, np.concatenate((x,y,z),0))
+  projection = np.stack((projection[0]/projection[2], projection[1]/projection[2]), axis=-1).flatten()
+  #print(projection)
 
-    frameWidth = frame.shape[1]
-    frameHeight = frame.shape[0]
-    inp = cv.dnn.blobFromImage(frame, 1.0 / 255, (width, height),
-                   (0, 0, 0), swapRB=False, crop=False)
-    self.net.setInput(inp)
-    out = self.net.forward()
+  return create_img(projection)
 
-    points = []
-    for i in range(len(BODY_PARTS)):
-      # Slice heatmap of corresponging body's part.
-      heatMap = out[0, i, :, :]
+def create_img(arr, img=None):
+  ps = [0, 1, 2, 0, 4, 5, 0, 7, 8, 9, 8, 11, 12, 8, 14, 15]
+  qs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  xs = arr[0::2].copy()
+  ys = arr[1::2].copy()
+  if img is None:
+    xs *= 80
+    xs += 100
+    ys *= 80
+    ys += 150
+    xs = xs.astype('i')
+    ys = ys.astype('i')
+    img = np.zeros((350, 200, 3), dtype=np.uint8) + 160
+    img = cv.line(img, (100, 0), (100, 350), (255, 255, 255), 1)
+    img = cv.line(img, (0, 150), (200, 150), (255, 255, 255), 1)
+    img = cv.rectangle(img, (0, 0), (200, 350), (255, 255, 255), 3)
+  for i, (p, q) in enumerate(zip(ps, qs)):
+    c = 1 / (len(ps) - 1) * i
+    b, g, r = color_jet(c)
+    img = cv.line(img, (xs[p], ys[p]), (xs[q], ys[q]), (b, g, r), 2)
+  for i in range(17):
+    c = 1 / 16 * i
+    b, g, r = color_jet(c)
+    img = cv.circle(img, (xs[i], ys[i]), 3, (b, g, r), 3)
+  return img
 
-      # Originally, we try to find all the local maximums. To simplify a sample
-      # we just find a global one. However only a single pose at the same time
-      # could be detected this way.
-      _, conf, _, point = cv.minMaxLoc(heatMap)
-      x = (frameWidth * point[0]) / out.shape[3]
-      y = (frameHeight * point[1]) / out.shape[2]
+def to36M(bones):
+  adjusted_bones = []
+  for name in H36M_JOINTS_17:
+    if not name in BODY_PARTS:
+      if name == 'Hip':
+        adjusted_bones.append((bones[BODY_PARTS['RHip']] + 
+                               bones[BODY_PARTS['LHip']]) / 2)
+      elif name == 'RFoot':
+        adjusted_bones.append(bones[BODY_PARTS['RAnkle']])
+      elif name == 'LFoot':
+        adjusted_bones.append(bones[BODY_PARTS['LAnkle']])
+      elif name == 'Spine':
+        adjusted_bones.append(
+          (bones[BODY_PARTS['RHip']] + bones[BODY_PARTS['LHip']] +
+          bones[BODY_PARTS['RShoulder']] + 
+          bones[BODY_PARTS['LShoulder']]) / 4)
+      elif name == 'Thorax':
+        adjusted_bones.append(
+          (bones[BODY_PARTS['RShoulder']] + 
+           bones[BODY_PARTS['LShoulder']]) / 2)
+      elif name == 'Head':
+        thorax = (bones[BODY_PARTS['RShoulder']] + 
+                  bones[BODY_PARTS['LShoulder']]) / 2
+        adjusted_bones.append(thorax + 
+                              (bones[BODY_PARTS['Nose']] - thorax) * 2)
+      elif name == 'Neck/Nose':
+        adjusted_bones.append(bones[BODY_PARTS['Nose']])
+      else:
+        raise Exception(name)
+    else:
+      adjusted_bones.append(bones[BODY_PARTS[name]])
 
-      # Add a point if it's confidence is higher than threshold.
-      points.append((x, y) if conf > thr else None)
-    return points
+  return adjusted_bones
 
-def create_pose(model, points):
-  model.eval()
+def normalize_2d(pose):
+  # Hip as origin and normalization
+  xs = pose.T[0::2] - pose.T[0]
+  ys = pose.T[1::2] - pose.T[1]
+  pose = pose.T / np.sqrt(xs[1:] ** 2 + ys[1:] ** 2).mean(axis=0)
 
-  x = points[:, 0::2]
-  y = points[:, 1::2]
+  mu_x = pose[0].copy()
+  mu_y = pose[1].copy()
+  pose[0::2] -= mu_x
+  pose[1::2] -= mu_y
 
-  points = torch.from_numpy(np.array(points))
-  if model.is_cuda:
-    points = points.cuda()
-  z_pred = model.forward(points).detach().cpu().numpy()
+  return pose.T
 
-  pose = np.stack((x, y, z_pred), axis=-1)
-  pose = np.reshape(pose, (len(points), -1))
+def capture_pose(frame):
+  points, frame_op = openpose.forward(frame, display=True)
 
-  return pose
+  if len(points) == 0:
+    return [], [], frame_op
 
-def capture_pose(openpose, frame, thr=0.1, width=368, height=368):
-  points = openpose.predict(frame, thr, width, height)
-  points = [np.array(vec) for vec in points]
-  points = utils.to36M(points, BODY_PARTS)
-  points = np.reshape(points, [1, -1]).astype('f')
-  img_2d_pose = utils.create_img(points[0], frame)
+  points = [np.array(vec) for vec in points[0]]
+  points = to36M(points)
+  points = np.reshape(points, -1)
+
+  conf = points[2::3]
+  points = np.delete(points, np.arange(2, points.shape[0], 3))
+  points = np.reshape(points, (1, -1))
   
-  points_norm = utils.normalize_2d(points)
-  pose = create_pose(model, points_norm)
+  points = normalize_2d(points)
 
-  return pose, img_2d_pose
+  z_pred = np.zeros([1,17])
+  #posenet.run(points)
+
+  pose = np.stack((points[:, 0::2], points[:, 1::2], z_pred), axis=-1)
+  pose = np.reshape(pose, (pose.shape[0], -1))
+
+  return pose, conf, frame_op
+
+def frame_to_3D(frame, pose, conf):
+  width = 184
+  height = 184
+
+  a = create_projection_img(pose, 0, 0)
+  a = cv.resize(a, (height, width))
+  b = create_projection_img(pose, 90, 0)
+  b = cv.resize(b, (height, width))
+  vstack1 = np.vstack((a,b))
+
+  c = create_projection_img(pose, 45, 45)
+  c = cv.resize(c, (height, width))
+  d = create_projection_img(pose, 0,90)
+  d = cv.resize(d, (height, width))
+  vstack2 = np.vstack((c,d))
+
+  list_conf = np.zeros((height*2,width,3), np.float)
+  thr = 0.1
+  font = cv.FONT_HERSHEY_SIMPLEX
+  line = cv.LINE_AA
+
+  for i,joint in enumerate(H36M_JOINTS_17,0):
+    spacing = (5,30+i*20)
+
+    color = (255,255,255)
+    if conf[0,i] < thr:
+      color = (0,0,255)
+
+    cv.putText(img_conf, joint + ' {:.3f}'.format(conf[0,i]), spacing,
+               font, .6, color, 1, line)
+
+  hstack = np.hstack((vstack1, frame, vstack2, list_conf))
+  return hstack
 
 def display_pose(pose):
   f = plt.figure()
@@ -141,32 +240,32 @@ def display_pose(pose):
 
   plt.show()
 
-def save_pose(pose, frame, out_directory='../output', deg=15):
-  os.makedirs(out_directory, exist_ok=True)
-  cv.imwrite(os.path.join(out_directory, 'openpose.jpg'), frame)
-  torch.save(pose, os.path.join(out_directory, 'pose.pt'))
-
-  images = []    
-  for d in range(0, 360 + deg, deg):
-    img = utils.create_projection_img(pose, np.pi * d / 180.)
-    images.append(img)
-    # cv.imwrite(os.path.join(out_directory, 'rot_{:03d}_degree.png'.format(d)), img)
-  imageio.mimsave(os.path.join(out_directory, 'output.gif'),images, fps=6)
-  print('=> Pose saved!')
-
 if __name__ == '__main__':
-  op_net = OpenPose(args.proto2d, args.model2d)
+  # OpenPose
+  params = dict()
+  params["logging_level"] = 3
+  params["output_resolution"] = "-1x-1"
+  params["net_resolution"] = "-1x368"
+  params["model_pose"] = "COCO"
+  params["alpha_pose"] = 0.6
+  params["scale_gap"] = 0.3
+  params["scale_number"] = 1
+  params["render_threshold"] = args.thr
+  params["num_gpu_start"] = 0
+  params["disable_blending"] = False
+  params["default_model_folder"] = "/home/narvis/Lib/openpose/models/"
+  openpose = OpenPose(params)
 
-  model = PoseNet(mode='generator').to(device)
-  if args.model3d[-4:] == '.npz':
-    model.load_npz(args.model3d)
-  else:
-    model.load_state_dict(torch.load(args.model3d)['netG'])
-  print('=> Model loaded!')
+  model = onnx.load(args.model)
+  model = onnx.utils.polish_model(model)
+  posenet = backend.prepare(model)
+  print('=> Models loaded!')
 
   cap = cv.VideoCapture(args.input if args.input else 0)
   pose = []
+  conf = []
   num_frames = 0
+  time_paused = 0
   start = time.time()
 
   while cap.isOpened():
@@ -176,14 +275,21 @@ if __name__ == '__main__':
     key = cv.waitKey(1) & 0xFF
     frame = cv.resize(frame, (368, 368))
 
-    if args.input or key == ord('p'):
-      pose, frame = capture_pose(op_net, frame, args.thr, args.width, args.height)
-      if args.save:
-        save_pose(pose, frame)
-    else:
-      if args.cuda:
-        _, frame = capture_pose(op_net, frame, args.thr, args.width, args.height)
-      cv.imshow('Video Demo', frame)
+    pose_tmp, conf_tmp, frame = capture_pose(frame)
+    if len(pose_tmp) > 0:
+      pose, conf = pose_tmp, conf_tmp
+
+    if key == ord('p'):  # pause
+      start_pause = time.time()
+
+      while True:
+        key2 = cv.waitKey(1) or 0xff
+        cv.imshow('Video Demo', frame)
+        if key2 == ord('p'):  # resume
+          time_paused += time.time() - start_pause
+          break
+
+    cv.imshow('Video Demo', frame)
 
     num_frames += 1
     if key == 27:  # exit
@@ -191,9 +297,12 @@ if __name__ == '__main__':
 
   elasped = time.time() - start
   print('[INFO] elasped time: {:.2f}s'.format(elasped))
-  print('[INFO] approx. FPS: {:.2f}'.format(num_frames / (elasped)))
+  print('[INFO] approx. FPS: {:.2f}'.format(num_frames / (elasped-time_paused)))
   
   cap.release()
   cv.destroyAllWindows()
 
-  display_pose(pose[0])
+  if len(pose) > 0:
+    display_pose(pose[0])
+  else:
+    print('[ERROR] No pose detected!')

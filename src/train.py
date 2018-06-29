@@ -89,7 +89,7 @@ fixed_data = np.array([ 0.        ,  0.        ,  -0.40023696,  0.04447079,
                         1.1117692 , -0.31129527,   1.0228276 ,  0.22235394,
                        -0.40023696, -1.0228276 ,  -0.8449447 , -0.40023685,
                        -1.1117692 ,  0.13341236  ])
-fixed_t = torch.from_numpy(fixed_data).float().to(device)
+fixed_t = torch.from_numpy(fixed_data).view(1,-1).float().to(device)
 
 optimizerG = torch.optim.Adam(netG.parameters(), lr=args.lr)
 optimizerD = torch.optim.Adam(netD.parameters(), lr=args.lr)
@@ -112,6 +112,7 @@ for epoch in range(start_epoch, args.epochs):
     batch_size = data.size(0)
     real_data = data.to(device)
     angle = 10/180*np.pi # min and (2pi-max) angle for rotation
+    
     ############################
     # (1) Update G network: maximize E[D(G(x))]
     ###########################
@@ -194,7 +195,7 @@ for epoch in range(start_epoch, args.epochs):
                                          .format(epoch+1))
 
 # export model
-torch.onnx.export(netG, fixed_t, '{:s}/posenet.onnx'.format(args.saveDir))
+torch.onnx.export(netG, fixed_t, '{:s}/posenet.proto'.format(args.saveDir))
 
 if args.visdom:
   opts_D = dict(xlabel='Weight', ylabel='Freq', title='Weight Histogram (D)')
