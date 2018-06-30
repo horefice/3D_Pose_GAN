@@ -74,14 +74,17 @@ def color_jet(x):
   return int(b), int(g), int(r)
 
 def create_projection_img(array, r1=0, r2=0):
-  x = array[:, 0::3]
-  y = array[:, 1::3]
-  z = array[:, 2::3]
+  x = np.clip(array[:, 0::3],-1,1)
+  y = np.clip(array[:, 1::3],-1,1)
+  z = np.clip(array[:, 2::3],-1,1)
 
-  rotMat, _ = cv.Rodrigues(np.array([r2,r1,0.]))
-  projection = np.dot(rotMat, np.concatenate((x,y,z),0))
-  projection = np.stack((projection[0]/projection[2], projection[1]/projection[2]), axis=-1).flatten()
-  #print(projection)
+  camera = np.array([[1,0,0],[0,1,0],[0,0,1]])
+  tMat = np.zeros((3,1))
+  rMat, _ = cv.Rodrigues((r2*np.pi/180,r1*np.pi/180,0.))
+  pMat = camera.dot(np.hstack((rMat,tMat)))
+
+  projection = np.dot(pMat, np.concatenate((x,y,z,np.ones(x.shape)),0))
+  projection = np.stack((projection[0], projection[1]), axis=-1).flatten()
 
   return create_img(projection)
 
@@ -174,7 +177,7 @@ def capture_pose(frame):
   
   points = normalize_2d(points)
 
-  z_pred = np.zeros([1,17])
+  z_pred = np.ones([1,17])
   #posenet.run(points)
 
   pose = np.stack((points[:, 0::2], points[:, 1::2], z_pred), axis=-1)
@@ -198,22 +201,23 @@ def frame_to_3D(frame, pose, conf):
   d = cv.resize(d, (height, width))
   vstack2 = np.vstack((c,d))
 
-  list_conf = np.zeros((height*2,width,3), np.float)
+  img_conf = np.zeros((height*2,width,3), np.uint8)
   thr = 0.1
   font = cv.FONT_HERSHEY_SIMPLEX
   line = cv.LINE_AA
 
   for i,joint in enumerate(H36M_JOINTS_17,0):
     spacing = (5,30+i*20)
+    conf[i] = min(max(0,conf[i]),1)
 
     color = (255,255,255)
-    if conf[0,i] < thr:
+    if conf[i] < thr:
       color = (0,0,255)
 
-    cv.putText(img_conf, joint + ' {:.3f}'.format(conf[0,i]), spacing,
+    cv.putText(img_conf, joint + ' {:.3f}'.format(conf[i]), spacing,
                font, .6, color, 1, line)
 
-  hstack = np.hstack((vstack1, frame, vstack2, list_conf))
+  hstack = np.hstack((vstack1, frame, vstack2, img_conf))
   return hstack
 
 def display_pose(pose):
@@ -258,7 +262,7 @@ if __name__ == '__main__':
 
   model = onnx.load(args.model)
   model = onnx.utils.polish_model(model)
-  posenet = backend.prepare(model)
+  #posenet = backend.prepare(model)
   print('=> Models loaded!')
 
   cap = cv.VideoCapture(args.input if args.input else 0)
@@ -278,6 +282,8 @@ if __name__ == '__main__':
     pose_tmp, conf_tmp, frame = capture_pose(frame)
     if len(pose_tmp) > 0:
       pose, conf = pose_tmp, conf_tmp
+
+    frame = frame_to_3D(frame, pose, conf)
 
     if key == ord('p'):  # pause
       start_pause = time.time()
@@ -305,4 +311,4 @@ if __name__ == '__main__':
   if len(pose) > 0:
     display_pose(pose[0])
   else:
-    print('[ERROR] No pose detected!')
+    print('=> No pose detected!')
