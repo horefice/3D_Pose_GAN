@@ -27,6 +27,8 @@ parser.add_argument('--seed', type=int, default=1, metavar='N',
                     help='random seed (default: 1)')
 parser.add_argument('--visdom', action='store_true', default=False,
                     help='enables VISDOM')
+parser.add_argument('--export', action='store_true', default=False,
+                    help='export model as ONNX')
 parser.add_argument('--save-interval', type=int, default=1, metavar='N',
                     help='how many epochs to wait before saving (default: 1)')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N',
@@ -47,6 +49,12 @@ if args.cuda:
   torch.backends.cudnn.benchmark = True
   kwargs = {'num_workers': 1, 'pin_memory': True}
 
+# Set Hyperparameters
+N_HIDDEN = 1024
+CRITIC_ITERS = 5 
+LAMBDA = 10
+minR = 10/180*np.pi # min angle for rotation before projection
+
 ## LOAD DATASETS
 print('\nDATASET INFO.')
 train_data = MPII('../data/mpii_poses.npy')
@@ -60,8 +68,8 @@ def weights_init(m):
       torch.nn.init.xavier_uniform_(m.weight)
       torch.nn.init.constant_(m.bias, 0.0)
 
-netG = PoseNet(mode='generator').to(device)
-netD = PoseNet(mode='discriminator').to(device)
+netG = PoseNet(n_hidden=N_HIDDEN,mode='generator').to(device)
+netD = PoseNet(n_hidden=N_HIDDEN,mode='discriminator').to(device)
 if args.model:
   netG.load_state_dict(torch.load(args.model)['netG'])
   netD.load_state_dict(torch.load(args.model)['netD'])
@@ -89,7 +97,7 @@ fixed_data = np.array([ 0.        ,  0.        ,  -0.40023696,  0.04447079,
                         1.1117692 , -0.31129527,   1.0228276 ,  0.22235394,
                        -0.40023696, -1.0228276 ,  -0.8449447 , -0.40023685,
                        -1.1117692 ,  0.13341236  ])
-fixed_t = torch.from_numpy(fixed_data).float().to(device)
+fixed_x = torch.from_numpy(fixed_data).float().to(device)
 
 optimizerG = torch.optim.Adam(netG.parameters(), lr=args.lr)
 optimizerD = torch.optim.Adam(netD.parameters(), lr=args.lr)
@@ -108,62 +116,66 @@ if args.visdom:
 
 print('Start')
 for epoch in range(start_epoch, args.epochs):
+  netD.train()
+  netG.train()
+  loss_G = 0
+
   for i, data in enumerate(data_loader, 1):
     batch_size = data.size(0)
     real_data = data.to(device)
-    angle = 10/180*np.pi # min and (2pi-max) angle for rotation
     
-    ############################
-    # (1) Update G network: maximize E[D(G(x))]
-    ###########################
-    netG.zero_grad()
-    for p in netD.parameters():
-      p.requires_grad = False  # disable to avoid computation
-    theta = angle + 2*(np.pi-angle)*torch.rand(batch_size, 17, device=device)
-    
-    z_pred = netG(real_data)
-    fake_data = utils.rotate_and_project(real_data, z_pred, theta)
+    if i % CRITIC_ITERS == 0:
+      ############################
+      # (1) Update D network: maximize E[D(x)] - E[D(G(x))] + GP
+      ###########################
+      # train with real
+      netD.zero_grad()
+      for p in netD.parameters():
+        p.requires_grad = True # enable back grad (see below)
 
-    G = netD(fake_data)
-    G = G.mean()
-    G.backward(mone)
+      D_real = netD(real_data)
+      D_real = D_real.mean()
+      D_real.backward(mone)
 
-    loss_G = -G.item()
-    optimizerG.step()
+      # train with fake
+      theta = minR + 2*(np.pi-minR)*torch.rand(batch_size, 17, device=device)
 
-    ############################
-    # (2) Update D network: maximize E[D(x)] - E[D(G(x))] + GP
-    ###########################
-    # train with real
-    netD.zero_grad()
-    for p in netD.parameters():
-      p.requires_grad = True # enable back grad (see below)
+      with torch.no_grad():
+        z_pred = netG(real_data)
+      fake_data = utils.rotate_and_project(real_data, z_pred, theta)
 
-    D_real = netD(real_data)
-    D_real = D_real.mean()
-    D_real.backward(mone)
+      D_fake = netD(fake_data)
+      D_fake = D_fake.mean()
+      D_fake.backward(one)
 
-    # train with fake
-    theta = angle + 2*(np.pi-angle)*torch.rand(batch_size, 17, device=device)
+      # gradient penalty
+      GP = utils.calc_gradient_penalty(netD, real_data, fake_data,
+                                       LAMBDA=LAMBDA, device=device)
+      GP.backward()
+      GP = GP.item()
 
-    with torch.no_grad():
+      loss_D = (D_fake - D_real + GP).item()
+      WD = (D_real - D_fake).item()
+      optimizerD.step()
+
+    else:
+      ############################
+      # (1) Update G network: maximize E[D(G(x))]
+      ###########################
+      netG.zero_grad()
+      for p in netD.parameters():
+        p.requires_grad = False  # disable to avoid computation
+      theta = minR + 2*(np.pi-minR)*torch.rand(batch_size, 17, device=device)
+      
       z_pred = netG(real_data)
-    fake_data = utils.rotate_and_project(real_data, z_pred, theta)
+      fake_data = utils.rotate_and_project(real_data, z_pred, theta)
 
-    D_fake = netD(fake_data)
-    D_fake = D_fake.mean()
-    D_fake.backward(one)
+      G = netD(fake_data)
+      G = G.mean()
+      G.backward(mone)
 
-    # gradient penalty
-    lambda_gp = 10
-    GP = utils.calc_gradient_penalty(netD, real_data, fake_data,
-                                     LAMBDA=lambda_gp, device=device)
-    GP.backward()
-    GP = GP.item()
-
-    loss_D = (D_fake - D_real + GP).item()
-    WD = (D_real - D_fake).item()
-    optimizerD.step()
+      loss_G = -G.item()
+      optimizerG.step()
 
     # Log
     if args.log_interval and i % args.log_interval == 0:
@@ -188,19 +200,22 @@ for epoch in range(start_epoch, args.epochs):
     print('Saved at checkpoint!')
 
     if args.visdom:
+      netG.eval()
       with torch.no_grad():
-        z_pred = netG(fixed_t.unsqueeze(0)).squeeze()
-      viz_3D = torch.stack((fixed_t[0::2], fixed_t[1::2], z_pred), dim=1)
+        z_pred = netG(fixed_x.unsqueeze(0)).squeeze()
+      viz_3D = torch.stack((fixed_x[0::2], fixed_x[1::2], z_pred), dim=1)
       visdom.create_scatter(viz_3D,title='Sample Prediction (epoch {:d})'
                                          .format(epoch+1))
-
-# export model
-torch.onnx.export(netG, fixed_t, '{:s}/posenet.proto'.format(args.saveDir))
 
 if args.visdom:
   opts_D = dict(xlabel='Weight', ylabel='Freq', title='Weight Histogram (D)')
   opts_G = dict(xlabel='Weight', ylabel='Freq', title='Weight Histogram (G)')
   visdom.create_hist(utils.flatten_weights(netD), opts=opts_D)
   visdom.create_hist(utils.flatten_weights(netG), opts=opts_G)
+
+# export model
+if args.export:
+  torch.onnx.export(netG, fixed_x.expand(2, -1), '{:s}/posenet.proto'
+                                                  .format(args.saveDir))
 
 print('Finish')

@@ -60,9 +60,9 @@ class PoseNet(MyNN):
     h1 = F.leaky_relu(self.l1(x))
     h2 = F.leaky_relu(self.l2(h1))
     h3 = F.leaky_relu(self.l3(h2) + h1)
-    h4 = self.l4(h3)
+    out = self.l4(h3)
 
-    return F.tanh(h4) if self.mode == 'generator' else F.sigmoid(h4)
+    return out
 
   def load_npz(self, path):
     npzfile = np.load(path)

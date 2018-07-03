@@ -177,8 +177,8 @@ def capture_pose(frame):
   
   points = normalize_2d(points)
 
-  z_pred = np.ones([1,17])
-  #posenet.run(points)
+  z_pred = np.tanh(np.random.randn(1,17))
+  #z_pred = posenet.run(points)
 
   pose = np.stack((points[:, 0::2], points[:, 1::2], z_pred), axis=-1)
   pose = np.reshape(pose, (pose.shape[0], -1))
@@ -188,16 +188,18 @@ def capture_pose(frame):
 def frame_to_3D(frame, pose, conf):
   width = 184
   height = 184
+  sideAngle = 45
+  elevation = 30
 
-  a = create_projection_img(pose, 0, 0)
+  a = create_projection_img(pose, sideAngle, elevation)
   a = cv.resize(a, (height, width))
-  b = create_projection_img(pose, 90, 0)
+  b = create_projection_img(pose, sideAngle, 0)
   b = cv.resize(b, (height, width))
   vstack1 = np.vstack((a,b))
 
-  c = create_projection_img(pose, 45, 45)
+  c = create_projection_img(pose, -sideAngle, elevation)
   c = cv.resize(c, (height, width))
-  d = create_projection_img(pose, 0,90)
+  d = create_projection_img(pose, -sideAngle, 0)
   d = cv.resize(d, (height, width))
   vstack2 = np.vstack((c,d))
 
@@ -290,12 +292,12 @@ if __name__ == '__main__':
 
       while True:
         key2 = cv.waitKey(1) or 0xff
-        cv.imshow('Video Demo', frame)
+        cv.imshow('Demo', frame)
         if key2 == ord('p'):  # resume
           time_paused += time.time() - start_pause
           break
 
-    cv.imshow('Video Demo', frame)
+    cv.imshow('Demo', frame)
 
     num_frames += 1
     if key == 27:  # exit
