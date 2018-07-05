@@ -1,6 +1,5 @@
 import numpy as np
 import cv2 as cv
-import torch
 import datetime
 import os
 
@@ -56,7 +55,7 @@ def create_projection_img(array, theta=0):
 
   return create_img(projection)
 
-def create_img(arr, img=None):
+def create_img(arr, img=None, conf=np.ones(17), thr=0):
   ps = [0, 1, 2, 0, 4, 5, 0, 7, 8, 9, 8, 11, 12, 8, 14, 15]
   qs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
   xs = arr[0::2].copy()
@@ -73,11 +72,15 @@ def create_img(arr, img=None):
     img = cv.line(img, (0, 150), (200, 150), (255, 255, 255), 1)
     img = cv.rectangle(img, (0, 0), (200, 350), (255, 255, 255), 3)
   for i, (p, q) in enumerate(zip(ps, qs)):
+    if (conf[p] < thr) | (conf[q] < thr):
+      continue
     c = 1 / (len(ps) - 1) * i
     b, g, r = color_jet(c)
     img = cv.line(img, (xs[p], ys[p]), (xs[q], ys[q]), (b, g, r), 2)
   for i in range(17):
-    c = 1 / 16 * i
+    if conf[i] < thr:
+      continue
+    c = 1 / 16.0 * i
     b, g, r = color_jet(c)
     img = cv.circle(img, (xs[i], ys[i]), 3, (b, g, r), 3)
   return img
@@ -91,26 +94,33 @@ def to36M(bones, body_parts):
   for name in H36M_JOINTS_17:
     if not name in body_parts:
       if name == 'Hip':
-        adjusted_bones.append((bones[body_parts['RHip']] + 
-                               bones[body_parts['LHip']]) / 2)
+        bone = (bones[body_parts['RHip']] + 
+                               bones[body_parts['LHip']]) / 2
+        bone[2] = np.minimum(bones[body_parts['RHip']][2],bones[body_parts['LHip']][2])
+        adjusted_bones.append(bone)
       elif name == 'RFoot':
         adjusted_bones.append(bones[body_parts['RAnkle']])
       elif name == 'LFoot':
         adjusted_bones.append(bones[body_parts['LAnkle']])
       elif name == 'Spine':
-        adjusted_bones.append(
-          (bones[body_parts['RHip']] + bones[body_parts['LHip']] +
-          bones[body_parts['RShoulder']] + 
-          bones[body_parts['LShoulder']]) / 4)
+        bone = (bones[body_parts['RHip']] + bones[body_parts['LHip']] +
+                bones[body_parts['RShoulder']] + 
+                bones[body_parts['LShoulder']]) / 4
+        tmp1 = np.minimum(bones[body_parts['RHip']][2],bones[body_parts['LHip']][2])
+        tmp2 = np.minimum(bones[body_parts['RShoulder']][2],bones[body_parts['LShoulder']][2])
+        bone[2] = np.minimum(tmp1,tmp2)
+        adjusted_bones.append(bone)
       elif name == 'Thorax':
-        adjusted_bones.append(
-          (bones[body_parts['RShoulder']] + 
-           bones[body_parts['LShoulder']]) / 2)
+        bone = (bones[body_parts['RShoulder']] + bones[body_parts['LShoulder']]) / 2
+        bone[2] = np.minimum(bones[body_parts['RShoulder']][2],bones[body_parts['LShoulder']][2])
+        adjusted_bones.append(bone)
       elif name == 'Head':
         thorax = (bones[body_parts['RShoulder']] + 
                   bones[body_parts['LShoulder']]) / 2
-        adjusted_bones.append(thorax + 
-                              (bones[body_parts['Nose']] - thorax) * 2)
+        thorax[2] = np.minimum(bones[body_parts['RShoulder']][2],bones[body_parts['LShoulder']][2])
+        bone = thorax + (bones[body_parts['Nose']] - thorax) * 2
+        bone[2] = np.minimum(thorax[2],bones[body_parts['Nose']][2])
+        adjusted_bones.append(bone)
       elif name == 'Neck/Nose':
         adjusted_bones.append(bones[body_parts['Nose']])
       else:
@@ -140,20 +150,20 @@ def flatten_weights(net):
   return weights
 
 def calc_gradient_penalty(netD, real_data, fake_data, LAMBDA=10, device='cpu'):
-    alpha = torch.rand(real_data.size(0), 1, device=device)
-    alpha = alpha.expand(real_data.size())
+  alpha = torch.rand(real_data.size(0), 1, device=device)
+  alpha = alpha.expand(real_data.size())
 
-    interpolates = (alpha * real_data + ((1 - alpha) * fake_data)).to(device)
-    interpolates.requires_grad_()
+  interpolates = (alpha * real_data + ((1 - alpha) * fake_data)).to(device)
+  interpolates.requires_grad_()
 
-    output_d = netD(interpolates)
+  output_d = netD(interpolates)
 
-    grads = torch.autograd.grad(outputs=output_d, inputs=interpolates,
-                                grad_outputs=torch.ones_like(output_d,
-                                device=device), create_graph=True)[0]
+  grads = torch.autograd.grad(outputs=output_d, inputs=interpolates,
+                              grad_outputs=torch.ones_like(output_d,
+                              device=device), create_graph=True)[0]
 
-    gradient_penalty = ((grads.norm(2, dim=1) - 1) ** 2).mean() * LAMBDA
-    return gradient_penalty
+  gradient_penalty = ((grads.norm(2, dim=1) - 1) ** 2).mean() * LAMBDA
+  return gradient_penalty
 
 def writeArgsFile(args,saveDir):
   os.makedirs(saveDir, exist_ok=True)

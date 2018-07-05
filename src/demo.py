@@ -5,6 +5,9 @@ import time
 import sys
 import os
 
+import webCamUtils
+from utils import color_jet, create_img, to36M, normalize_2d
+
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
@@ -20,7 +23,7 @@ parser.add_argument('--model', type=str, help='Path to ONNX model',
                     default='../models/posenet.proto')
 parser.add_argument('--backend', type=str, help='ONNX Backend (caffe or tf)',
                     default='tf')
-parser.add_argument('--thr', default=0.05, type=float, help='Threshold value for heatmap')
+parser.add_argument('--thr', default=0.1, type=float, help='Threshold value for rendering')
 args = parser.parse_args()
 if args.backend == 'tf':
   import onnx_tf.backend as backend
@@ -36,47 +39,22 @@ BODY_PARTS = {'Nose': 0, 'Neck': 1, 'RShoulder': 2, 'RElbow': 3, 'RWrist': 4,
               'RAnkle': 10, 'LHip': 11, 'LKnee': 12, 'LAnkle': 13, 'REye': 14,
               'LEye': 15, 'REar': 16, 'LEar': 17, 'Background': 18}
 
-POSE_PAIRS = [['Neck', 'RShoulder'], ['Neck', 'LShoulder'], ['RShoulder', 'RElbow'],
-              ['RElbow', 'RWrist'], ['LShoulder', 'LElbow'], ['LElbow', 'LWrist'],
-              ['Neck', 'RHip'], ['RHip', 'RKnee'], ['RKnee', 'RAnkle'], ['Neck', 'LHip'],
-              ['LHip', 'LKnee'], ['LKnee', 'LAnkle'], ['Neck', 'Nose'], ['Nose', 'REye'],
-              ['REye', 'REar'], ['Nose', 'LEye'], ['LEye', 'LEar']]
-
 # GRAPHS (H36M)
 H36M_JOINTS_17 = ['Hip', 'RHip', 'RKnee', 'RFoot', 'LHip', 'LKnee', 'LFoot',
                   'Spine', 'Thorax', 'Neck/Nose', 'Head', 'LShoulder',
                   'LElbow', 'LWrist', 'RShoulder', 'RElbow', 'RWrist']
-H36M_POSE_PAIRS = [['Neck/Nose', 'RShoulder'], ['Neck/Nose', 'LShoulder'],
-                   ['RShoulder', 'RElbow'], ['RElbow', 'RWrist'],
-                   ['LShoulder', 'LElbow'], ['LElbow', 'LWrist'],
-                   ['Head','Neck/Nose'], ['Neck/Nose', 'Thorax'],
-                   ['Thorax', 'Spine'], ['Spine', 'Hip'],
-                   ['Hip', 'RHip'], ['RHip', 'RKnee'], ['RKnee', 'RFoot'],
-                   ['Hip', 'LHip'], ['LHip', 'LKnee'], ['LKnee', 'LFoot']]
+H36M_POSE_PAIRS = [['Hip', 'RHip'], ['RHip', 'RKnee'], ['RKnee', 'RFoot'],
+                   ['Hip', 'LHip'], ['LHip', 'LKnee'], ['LKnee', 'LFoot'],
+                   ['Hip', 'Spine'],['Spine', 'Thorax'],
+                   ['Thorax', 'Neck/Nose'], ['Neck/Nose','Head'],
+                   ['Thorax', 'LShoulder'], ['LShoulder', 'LElbow'],
+                   ['LElbow', 'LWrist'], ['Thorax', 'RShoulder'],
+                   ['RShoulder', 'RElbow'], ['RElbow', 'RWrist']]
 
-def color_jet(x):
-  if x < 0.25:
-    b = 255
-    g = x / 0.25 * 255
-    r = 0
-  elif x >= 0.25 and x < 0.5:
-    b = 255 - (x - 0.25) / 0.25 * 255
-    g = 255
-    r = 0
-  elif x >= 0.5 and x < 0.75:
-    b = 0
-    g = 255
-    r = (x - 0.5) / 0.25 * 255
-  else:
-    b = 0
-    g = 255 - (x - 0.75) / 0.25 * 255
-    r = 255
-  return int(b), int(g), int(r)
-
-def create_projection_img(array, r1=0, r2=0):
-  x = np.clip(array[:, 0::3],-1,1)
-  y = np.clip(array[:, 1::3],-1,1)
-  z = np.clip(array[:, 2::3],-1,1)
+def create_projection_img(array, r1=0, r2=0, conf=[], thr=0):
+  x = array[:, 0::3]
+  y = array[:, 1::3]
+  z = array[:, 2::3]
 
   camera = np.array([[1,0,0],[0,1,0],[0,0,1]])
   tMat = np.zeros((3,1))
@@ -86,80 +64,7 @@ def create_projection_img(array, r1=0, r2=0):
   projection = np.dot(pMat, np.concatenate((x,y,z,np.ones(x.shape)),0))
   projection = np.stack((projection[0], projection[1]), axis=-1).flatten()
 
-  return create_img(projection)
-
-def create_img(arr, img=None):
-  ps = [0, 1, 2, 0, 4, 5, 0, 7, 8, 9, 8, 11, 12, 8, 14, 15]
-  qs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-  xs = arr[0::2].copy()
-  ys = arr[1::2].copy()
-  if img is None:
-    xs *= 80
-    xs += 100
-    ys *= 80
-    ys += 150
-    xs = xs.astype('i')
-    ys = ys.astype('i')
-    img = np.zeros((350, 200, 3), dtype=np.uint8) + 160
-    img = cv.line(img, (100, 0), (100, 350), (255, 255, 255), 1)
-    img = cv.line(img, (0, 150), (200, 150), (255, 255, 255), 1)
-    img = cv.rectangle(img, (0, 0), (200, 350), (255, 255, 255), 3)
-  for i, (p, q) in enumerate(zip(ps, qs)):
-    c = 1 / (len(ps) - 1) * i
-    b, g, r = color_jet(c)
-    img = cv.line(img, (xs[p], ys[p]), (xs[q], ys[q]), (b, g, r), 2)
-  for i in range(17):
-    c = 1 / 16 * i
-    b, g, r = color_jet(c)
-    img = cv.circle(img, (xs[i], ys[i]), 3, (b, g, r), 3)
-  return img
-
-def to36M(bones):
-  adjusted_bones = []
-  for name in H36M_JOINTS_17:
-    if not name in BODY_PARTS:
-      if name == 'Hip':
-        adjusted_bones.append((bones[BODY_PARTS['RHip']] + 
-                               bones[BODY_PARTS['LHip']]) / 2)
-      elif name == 'RFoot':
-        adjusted_bones.append(bones[BODY_PARTS['RAnkle']])
-      elif name == 'LFoot':
-        adjusted_bones.append(bones[BODY_PARTS['LAnkle']])
-      elif name == 'Spine':
-        adjusted_bones.append(
-          (bones[BODY_PARTS['RHip']] + bones[BODY_PARTS['LHip']] +
-          bones[BODY_PARTS['RShoulder']] + 
-          bones[BODY_PARTS['LShoulder']]) / 4)
-      elif name == 'Thorax':
-        adjusted_bones.append(
-          (bones[BODY_PARTS['RShoulder']] + 
-           bones[BODY_PARTS['LShoulder']]) / 2)
-      elif name == 'Head':
-        thorax = (bones[BODY_PARTS['RShoulder']] + 
-                  bones[BODY_PARTS['LShoulder']]) / 2
-        adjusted_bones.append(thorax + 
-                              (bones[BODY_PARTS['Nose']] - thorax) * 2)
-      elif name == 'Neck/Nose':
-        adjusted_bones.append(bones[BODY_PARTS['Nose']])
-      else:
-        raise Exception(name)
-    else:
-      adjusted_bones.append(bones[BODY_PARTS[name]])
-
-  return adjusted_bones
-
-def normalize_2d(pose):
-  # Hip as origin and normalization
-  xs = pose.T[0::2] - pose.T[0]
-  ys = pose.T[1::2] - pose.T[1]
-  pose = pose.T / np.sqrt(xs[1:] ** 2 + ys[1:] ** 2).mean(axis=0)
-
-  mu_x = pose[0].copy()
-  mu_y = pose[1].copy()
-  pose[0::2] -= mu_x
-  pose[1::2] -= mu_y
-
-  return pose.T
+  return create_img(projection, conf=conf, thr=thr)
 
 def capture_pose(frame):
   points, frame_op = openpose.forward(frame, display=True)
@@ -168,73 +73,87 @@ def capture_pose(frame):
     return [], [], frame_op
 
   points = [np.array(vec) for vec in points[0]]
-  points = to36M(points)
+  points = to36M(points, BODY_PARTS)
   points = np.reshape(points, -1)
 
   conf = points[2::3]
   points = np.delete(points, np.arange(2, points.shape[0], 3))
   points = np.reshape(points, (1, -1))
-  
+
   points = normalize_2d(points)
 
-  z_pred = np.tanh(np.random.randn(1,17))
-  #z_pred = posenet.run(points)
+  z_pred = posenet.run(np.concatenate((points,points), axis=0))._0[0,:].reshape(1,-1)
 
   pose = np.stack((points[:, 0::2], points[:, 1::2], z_pred), axis=-1)
   pose = np.reshape(pose, (pose.shape[0], -1))
 
   return pose, conf, frame_op
 
-def frame_to_3D(frame, pose, conf):
+def frame_to_GUI(frame, pose, conf):
   width = 184
   height = 184
   sideAngle = 45
-  elevation = 30
+  elevation = 45
+  views = [(sideAngle, elevation),(sideAngle, 0),
+           (-sideAngle, elevation),(-sideAngle, 0)]
 
-  a = create_projection_img(pose, sideAngle, elevation)
+  font = cv.FONT_HERSHEY_SIMPLEX
+  line = cv.LINE_AA
+  spacing = (5, height - 5)
+  fontscale = .5
+  color = (255, 255, 255)
+  thickness = 1
+
+  a = create_projection_img(pose, views[0][0], views[0][1], conf, args.thr)
   a = cv.resize(a, (height, width))
-  b = create_projection_img(pose, sideAngle, 0)
+  cv.putText(a, "SideRot:{:d} Elev:{:d}".format(views[0][0], views[0][1]), spacing, font, fontscale, color, thickness, line)
+  b = create_projection_img(pose, views[1][0], views[1][1], conf, args.thr)
   b = cv.resize(b, (height, width))
+  cv.putText(b, "SideRot:{:d} Elev:{:d}".format(views[1][0], views[1][1]), spacing, font, fontscale, color, thickness, line)
   vstack1 = np.vstack((a,b))
 
-  c = create_projection_img(pose, -sideAngle, elevation)
+  c = create_projection_img(pose, views[2][0], views[2][1], conf, args.thr)
   c = cv.resize(c, (height, width))
-  d = create_projection_img(pose, -sideAngle, 0)
+  cv.putText(c, "SideRot:{:d} Elev:{:d}".format(views[2][0], views[2][1]), spacing, font, fontscale, color, thickness, line)
+  d = create_projection_img(pose, views[3][0], views[3][1], conf, args.thr)
   d = cv.resize(d, (height, width))
+  cv.putText(d, "SideRot:{:d} Elev:{:d}".format(views[3][0], views[3][1]), spacing, font, fontscale, color, thickness, line)
   vstack2 = np.vstack((c,d))
 
   img_conf = np.zeros((height*2,width,3), np.uint8)
-  thr = 0.1
-  font = cv.FONT_HERSHEY_SIMPLEX
-  line = cv.LINE_AA
 
-  for i,joint in enumerate(H36M_JOINTS_17,0):
+  for i,joint in enumerate(H36M_JOINTS_17):
     spacing = (5,30+i*20)
     conf[i] = min(max(0,conf[i]),1)
 
-    color = (255,255,255)
-    if conf[i] < thr:
-      color = (0,0,255)
+    if conf[i] < args.thr:
+      color_conf = (0,0,255)
+    else:
+      color_conf = color
 
     cv.putText(img_conf, joint + ' {:.3f}'.format(conf[i]), spacing,
-               font, .6, color, 1, line)
+               font, fontscale, color_conf, thickness, line)
 
   hstack = np.hstack((vstack1, frame, vstack2, img_conf))
   return hstack
 
-def display_pose(pose):
+def display_pose(pose, conf=np.ones(17), thr=0):
   f = plt.figure()
   f.suptitle('Demo')
 
   ax = f.add_subplot(111, projection='3d')
   ax.set_title('3D Pose Estimation')
 
-  for part in H36M_JOINTS_17:
+  for j, part in enumerate(H36M_JOINTS_17):
+    if conf[j] < thr:
+      continue
     i = H36M_JOINTS_17.index(part)*3
     ax.plot([pose[i]],[pose[i+1]],[pose[i+2]], 'o')
-  for pair in H36M_POSE_PAIRS:
+  for j, pair in enumerate(H36M_POSE_PAIRS):
     i1 = H36M_JOINTS_17.index(pair[0])*3
     i2 = H36M_JOINTS_17.index(pair[1])*3
+    if (conf[int(i1/3)] < thr) | (conf[int(i2/3)] < thr):
+      continue
     ax.plot([pose[i1],pose[i2]],
           [pose[i1+1],pose[i2+1]],
           [pose[i1+2],pose[i2+2]], 'g')
@@ -264,10 +183,12 @@ if __name__ == '__main__':
 
   model = onnx.load(args.model)
   model = onnx.utils.polish_model(model)
-  #posenet = backend.prepare(model)
+  posenet = backend.prepare(model)
   print('=> Models loaded!')
 
-  cap = cv.VideoCapture(args.input if args.input else 0)
+  cap = webCamUtils.WebcamVideoStream(args.input if args.input else 0)
+  #cap = cv.VideoCapture(args.input if args.input else 0)
+
   pose = []
   conf = []
   num_frames = 0
@@ -285,23 +206,31 @@ if __name__ == '__main__':
     if len(pose_tmp) > 0:
       pose, conf = pose_tmp, conf_tmp
 
-    frame = frame_to_3D(frame, pose, conf)
+    frame = frame_to_GUI(frame, pose, conf)
 
-    if key == ord('p'):  # pause
+    if key == ord('p'): # pause
       start_pause = time.time()
 
       while True:
         key2 = cv.waitKey(1) or 0xff
         cv.imshow('Demo', frame)
-        if key2 == ord('p'):  # resume
+        if key2 == ord('p'): # resume
           time_paused += time.time() - start_pause
+          break
+        elif key2 == 27: # exit
+          time_paused += time.time() - start_pause
+          key = 27
           break
 
     cv.imshow('Demo', frame)
 
     num_frames += 1
-    if key == 27:  # exit
+    if key == 27: # exit
       break
+  else:
+    start_pause = time.time()
+    cv.waitKey(0)
+    time_paused += time.time() - start_pause
 
   elasped = time.time() - start
   print('[INFO] elasped time: {:.2f}s'.format(elasped))
@@ -311,6 +240,6 @@ if __name__ == '__main__':
   cv.destroyAllWindows()
 
   if len(pose) > 0:
-    display_pose(pose[0])
+    display_pose(pose[0], conf=conf, thr=args.thr)
   else:
     print('=> No pose detected!')
