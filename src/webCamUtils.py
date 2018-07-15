@@ -8,7 +8,6 @@ class WebcamVideoStream:
         # from the stream
         self.name = name
         self.oneshot = False
-        print(src)
         if str(src).lower().endswith(('.png', '.jpg')):
             self.frame = cv.imread(src)
             self.stopped = False

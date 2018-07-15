@@ -78,16 +78,19 @@ def capture_pose(frame):
 
   conf = points[2::3]
   points = np.delete(points, np.arange(2, points.shape[0], 3))
-  points = np.reshape(points, (1, -1))
 
+  frame = create_img(points, img=frame, conf=conf, thr=args.thr)
+
+  points = np.reshape(points, (1, -1))
   points = normalize_2d(points)
 
+  #z_pred = np.tanh(np.random.randn(1,17))
   z_pred = posenet.run(np.concatenate((points,points), axis=0))._0[0,:].reshape(1,-1)
 
   pose = np.stack((points[:, 0::2], points[:, 1::2], z_pred), axis=-1)
   pose = np.reshape(pose, (pose.shape[0], -1))
 
-  return pose, conf, frame_op
+  return pose, conf, frame
 
 def frame_to_GUI(frame, pose, conf):
   width = 184
